@@ -34,3 +34,28 @@ describe('k-pop quoted titles', () => {
     expect(pvt(input, 'RESCENE')).toEqual({ artist, title });
   });
 });
+
+describe('lyrics suffixes', () => {
+  it.each([
+    ["BewhY (비와이) - 악수 [POP IS CRYIN']ㅣLyrics/가사", 'BewhY', '악수'],
+    ['C JAMM - 신기루 (illusion) | 가사 | Lyrics', 'C JAMM', '신기루 (illusion)'],
+  ])('%s', (input, artist, title) => {
+    expect(pvt(input, 'x')).toEqual({ artist, title });
+  });
+});
+
+describe('multi-artist dash titles', () => {
+  it.each([
+    ['C JAMM (씨잼) & BewhY (비와이) - puzzle |  Lyrics / 가사', 'C JAMM', 'puzzle'],
+    ['Tiger JK, Paloalto, 우원재 - Love Peace Movement (호심술 REMIX) | [DF LIVE]', 'Tiger JK', 'Love Peace Movement (호심술 REMIX)'],
+  ])('%s', (input, artist, title) => {
+    expect(pvt(input, 'x')).toEqual({ artist, title });
+  });
+});
+
+describe('apostrophes inside quoted titles', () => {
+  it('keeps You’re inside the title', () => {
+    expect(pvt("ILLIT (아일릿) '체포하겠어 (You’re Under Arrest)’ Official MV", 'ILLIT'))
+      .toEqual({ artist: 'ILLIT', title: '체포하겠어 (You’re Under Arrest)' });
+  });
+});

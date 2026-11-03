@@ -33,17 +33,31 @@ async function paletteFor(videoId: string): Promise<Palette> {
   return paletteFromPixels(ctx.getImageData(0, 0, 64, 36).data);
 }
 
-/** LRCLIB first, NetEase fallback. Errors propagate (never cached as null). */
+/**
+ * Query LRCLIB and NetEase in parallel (LRCLIB is often 503-overloaded and slow to retry).
+ * Priority: LRCLIB synced > NetEase synced > LRCLIB plain > NetEase plain.
+ * Once NetEase has synced lyrics, wait at most LRCLIB_GRACE_MS more for LRCLIB.
+ * Errors propagate only when both sources fail (never cached as null).
+ */
+const LRCLIB_GRACE_MS = 2500;
+const LRCLIB_DEADLINE_MS = 9000;
+type Settled = { r?: LyricsResult | null; e?: unknown };
 async function lyricsFor(q: SongQuery): Promise<LyricsResult | null> {
-  let lrcErr: unknown = null;
-  try {
-    const r = await fetchLyrics(q);
-    if (r) return r;
-  } catch (e) { lrcErr = e; }
-  const n = await fetchNetease(q).catch((e: unknown) => { throw lrcErr ?? e; });
-  if (n) return n;
-  if (lrcErr) throw lrcErr;
-  return null;
+  const lrc: Promise<Settled> = fetchLyrics(q).then((r) => ({ r }), (e: unknown) => ({ e }));
+  const ne: Promise<Settled> = fetchNetease(q).then((r) => ({ r }), (e: unknown) => ({ e }));
+  const n = await ne;
+  let l: Settled | null;
+  if (n.r?.kind === 'synced') {
+    l = await Promise.race([lrc, new Promise<null>((res) => setTimeout(() => res(null), LRCLIB_GRACE_MS))]);
+  } else {
+    // Hard cap: an overloaded LRCLIB must not leave the panel loading forever.
+    l = await Promise.race([lrc, new Promise<Settled>((res) => setTimeout(() => res({ e: new Error('LRCLIB timeout') }), LRCLIB_DEADLINE_MS))]);
+  }
+  const cands = [l?.r, n.r].filter((x): x is LyricsResult => !!x);
+  const best = cands.find((x) => x.kind === 'synced') ?? cands[0] ?? null;
+  if (best) return best;
+  if (l?.e && n.e) throw l.e; // both sources failed -> error state (not cached)
+  return null; // NetEase answered cleanly with nothing -> not found
 }
 
 async function videoMeta(videoId: string): Promise<{ title: string; channel: string }> {
