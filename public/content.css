@@ -171,7 +171,15 @@
 @keyframes uw-intro-bob { 50% { transform: translateY(calc(-50% - 6px)) scale(1.08); } }
 .uw-sync { display: flex; gap: 6px; justify-content: flex-end; padding: 0 16px 6px; position: relative; }
 .uw-sync-btn { width: auto; height: 26px; padding: 0 10px; font-size: 12px; border-radius: 13px; }
-.uw-collapsed .uw-sync, .uw-panel:not([data-status='synced']) .uw-sync { display: none; }
+.uw-collapsed .uw-sync, .uw-panel:not([data-status='synced']):not(.uw-has-anchors) .uw-sync { display: none; }
+.uw-panel:not([data-status='synced']) .uw-sync-btn:not(.uw-reset-btn) { display: none; }
+.uw-reset-btn[hidden] { display: none; }
+.uw-anchored::before { content: ''; display: inline-block; width: 6px; height: 6px; margin: 0 6px 0.2em 0; border-radius: 50%; background: var(--uw-glow); vertical-align: middle; }
+.uw-hint { margin: 0 16px 12px; font-size: 12px; color: rgba(255,255,255,.6); text-align: center; }
+.uw-plain { cursor: pointer; user-select: none; }
+.uw-results-divider { margin: 8px 2px 2px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.18); font-size: 12px; color: rgba(255,255,255,.6); }
+.uw-result-partial { opacity: .6; }
+.uw-result-partial:hover, .uw-result-partial:focus-visible, .uw-result-partial.uw-result-current { opacity: 1; }
 .uw-toast {
   position: absolute; left: 50%; bottom: 16px; transform: translate(-50%, 8px);
   padding: 6px 12px; border-radius: 999px; font-size: 13px; color: #fff;

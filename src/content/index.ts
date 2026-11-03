@@ -1,5 +1,5 @@
 import { send, ContextInvalidated } from '../shared/messages';
-import type { Chapter, LyricsResult, Palette, ResolveContext, SongQuery } from '../shared/types';
+import type { Chapter, LyricLine, LyricsResult, Palette, ResolveContext, SongQuery } from '../shared/types';
 import { overrideKey } from '../lib/keys';
 import { buildQueries } from '../lib/queries';
 import { parseChapters, chapterAt } from '../lib/chapters';
@@ -8,6 +8,7 @@ import { shiftHue } from '../lib/color';
 import { blurLevel, staggerDelay, scrollOffset, fillTiming, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
 import { segments, unitsToChar, priorOffset, estimateOffset, smoothOffset, isIntro, FillTracker, formatOffset, type Segment } from './align';
 import { VocalTracker } from './audio';
+import { addAnchor, timedLines, parseAnchors, groupByMatch, type Anchor } from './anchors';
 import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, displayTitle, displayArtist, type Action, type PanelState } from './state';
 
 const PARTICLES = 14;
@@ -49,6 +50,7 @@ async function metaInPage(videoId: string): Promise<{ title: string; channel: st
 }
 
 const offsetKey = (id: string) => `uw:offset:${id}`;
+const anchorKey = (id: string, chapter?: string) => `uw:anchors:${id}#${chapter ?? ''}`;
 const LONG_PRESS_MS = 550;
 const ESTIMATE_MS = 15000;
 const MIN_COVERAGE = 20;
@@ -68,7 +70,7 @@ function readDescriptionScript(videoId: string): string {
 
 const domTitle = () => document.querySelector('ytd-watch-metadata h1')?.textContent?.trim() ?? '';
 const domChannel = () => document.querySelector('#owner #channel-name a')?.textContent?.trim() ?? '';
-type Cand = LyricsResult & { duration?: number };
+type Cand = LyricsResult & { duration?: number; match?: 'exact' | 'partial' };
 const SEARCH_DEBOUNCE_MS = 300;
 const formatDuration = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -147,6 +149,11 @@ class Panel {
   fillSegs: Segment[] = [];
   fillCum: number[] = [];
   lastLyricT = NaN;
+  // manual sync anchors for the current song; `timed` = lines in (chapter-relative) video time, or null if unsynced
+  anchors: Anchor[] = [];
+  timed: LyricLine[] | null = null;
+  anchorSeq = 0;
+  resetBtn = el('button', 'uw-btn uw-chip uw-sync-btn uw-reset-btn', '싱크 초기화');
   estTimer = 0;
   toastTimer = 0;
   introEl = el('div', 'uw-intro', '♪');
@@ -191,6 +198,10 @@ class Panel {
       b.addEventListener('click', () => this.setManualOffset(this.syncOffset + d));
       syncRow.append(b);
     }
+    this.resetBtn.type = 'button';
+    this.resetBtn.hidden = true;
+    this.resetBtn.addEventListener('click', () => this.clearAnchors());
+    syncRow.prepend(this.resetBtn);
     this.introEl.setAttribute('aria-hidden', 'true');
     this.introEl.hidden = true;
     this.toastEl.setAttribute('role', 'status');
@@ -219,8 +230,8 @@ class Panel {
       const line = (e.target as HTMLElement).closest<HTMLElement>('.uw-line');
       longPressed = false;
       clearTimeout(pressTimer);
-      if (!line?.dataset.time) return;
-      pressTimer = window.setTimeout(() => { longPressed = true; this.lineSungNow(Number(line.dataset.time)); }, LONG_PRESS_MS);
+      if (!line?.dataset.index) return;
+      pressTimer = window.setTimeout(() => { longPressed = true; this.lineSungNow(Number(line.dataset.index)); }, LONG_PRESS_MS);
     });
     const cancelPress = () => clearTimeout(pressTimer);
     this.lyricsEl.addEventListener('pointerup', cancelPress);
@@ -231,7 +242,7 @@ class Panel {
       if (longPressed) { longPressed = false; return; }
       const line = (e.target as HTMLElement).closest<HTMLElement>('.uw-line');
       const t = line?.dataset.time;
-      if (t != null && this.video && Number(t) >= 0) this.video.currentTime = Number(t) + this.chapterStart + this.syncOffset;
+      if (t != null && t !== '' && this.video && Number(t) >= 0) this.video.currentTime = Number(t) + this.chapterStart + this.syncOffset;
     });
     this.body.addEventListener('wheel', (e) => this.onUserScroll(e), { passive: false });
     const onVis = () => this.updatePaused();
@@ -303,8 +314,15 @@ class Panel {
   }
 
   dispatch(a: Action) {
+    const prev = this.state.result;
     this.state = reduce(this.state, a);
+    if (this.state.result !== prev) {
+      // different lyrics: anchors (line indices) no longer apply
+      if (this.anchors.length) { this.anchors = []; this.manualSync = false; }
+      this.anchorSeq++;
+    }
     this.render();
+    if (this.state.result && this.state.result !== prev) this.loadAnchors();
   }
 
   // ----- video tracking -----
@@ -345,9 +363,9 @@ class Panel {
       const idx = chapterAt(this.chapters, t)?.index ?? -1;
       if (idx !== this.chapterIndex) { this.resolveSong(); return; }
     }
-    if (this.state.status !== 'synced' || !this.state.result) return;
+    const lines = this.timed;
+    if (!lines) return;
     const lt = this.lyricTime();
-    const lines = this.state.result.lines;
     const intro = isIntro(lines, lt);
     this.root.classList.toggle('uw-intro-on', intro);
     this.introEl.hidden = !intro;
@@ -381,15 +399,65 @@ class Panel {
     this.refresh();
   }
 
-  /** "This line is being sung now". */
-  lineSungNow(lineTime: number) {
-    if (!this.video || lineTime < 0) return;
-    this.setManualOffset(this.video.currentTime - this.chapterStart - lineTime);
+  /** "This line is being sung now": add (or move) a sync anchor on it. */
+  lineSungNow(lineIndex: number) {
+    const res = this.state.result;
+    if (!this.video || !res || !(lineIndex >= 0 && lineIndex < res.lines.length)) return;
+    const videoTime = Math.round((this.video.currentTime - this.chapterStart) * 100) / 100;
+    this.anchors = addAnchor(this.anchors, { lineIndex, videoTime });
+    // anchors replace the global offset; auto-estimation must never override them
+    this.syncOffset = 0;
+    this.manualSync = true;
+    chrome.storage?.local.remove(offsetKey(this.videoId)).catch(() => {});
+    this.saveAnchors();
+    const n = this.anchors.length;
+    this.showToast(res.kind === 'plain' && n < 2 ? `싱크 지점 ${n}개 저장됨 · 한 곳 더 맞춰 주세요` : `싱크 지점 ${n}개 저장됨`);
+    this.render();
+  }
+
+  anchorStoreKey(): string { return anchorKey(this.videoId, this.lastCtx?.chapterTitle); }
+
+  saveAnchors() {
+    const res = this.state.result;
+    if (!res) return;
+    const key = this.anchorStoreKey();
+    if (!this.anchors.length) { chrome.storage?.local.remove(key).catch(() => {}); return; }
+    chrome.storage?.local.set({ [key]: { title: res.title, artist: res.artist, anchors: this.anchors } }).catch(() => {});
+  }
+
+  /** Restore anchors saved for this video/chapter, only if they belong to the same lyrics. */
+  loadAnchors() {
+    const res = this.state.result;
+    const seq = ++this.anchorSeq;
+    const key = this.anchorStoreKey();
+    if (!res) return;
+    chrome.storage?.local.get(key).then((r) => {
+      const v = r[key] as { title?: string; artist?: string; anchors?: unknown } | undefined;
+      if (!this.alive || seq !== this.anchorSeq || this.state.result !== res || !v) return;
+      if (v.title !== res.title || v.artist !== res.artist) return;
+      const list = parseAnchors(v.anchors).filter((a) => a.lineIndex < res.lines.length);
+      if (!list.length) return;
+      this.anchors = list;
+      this.syncOffset = 0;
+      this.manualSync = true;
+      this.render();
+    }).catch(() => {});
+  }
+
+  clearAnchors() {
+    this.anchors = [];
+    this.saveAnchors();
+    this.manualSync = false;
+    this.autoConfident = false;
+    this.syncOffset = 0;
+    this.applyPrior();
+    this.showToast('싱크를 초기화했어요');
+    this.render();
   }
 
   autoEstimate() {
     const res = this.state.result;
-    if (this.manualSync || !this.tracker?.ready || this.state.status !== 'synced' || !res) return;
+    if (this.manualSync || this.anchors.length || !this.tracker?.ready || this.state.status !== 'synced' || !res) return;
     const onsets = this.tracker.onsets
       .filter((o) => o.t >= this.chapterStart)
       .map((o) => ({ t: o.t - this.chapterStart, s: o.s }));
@@ -474,15 +542,15 @@ class Panel {
   /** Start (or restart) the karaoke fill on the active line. */
   applyFill(restart: boolean) {
     const cur = this.lineEls[this.current];
-    const res = this.state.result;
-    if (!cur || !res || this.state.status !== 'synced' || !this.video) return;
+    const lines = this.timed;
+    if (!cur || !lines || !this.video) return;
     const lt = this.lyricTime();
-    const f = fillTiming(res.lines, this.current, lt, this.video.playbackRate);
+    const f = fillTiming(lines, this.current, lt, this.video.playbackRate);
     if (!f) return;
     const voice = !!this.tracker?.ready && !reducedMotion();
     cur.classList.toggle('uw-voice', voice);
     if (voice) {
-      const line = res.lines[this.current];
+      const line = lines[this.current];
       const segs = segments(line.text);
       const total = segs.reduce((a, g) => a + g.units, 0);
       const fresh = !this.fill || this.fill.start !== line.time;
@@ -517,7 +585,7 @@ class Panel {
   }
 
   onUserScroll(e: WheelEvent) {
-    if (this.state.status !== 'synced') return;
+    if (!this.timed) return;
     e.preventDefault();
     this.manualOffset -= e.deltaY;
     const max = this.lyricsEl.scrollHeight;
@@ -695,12 +763,12 @@ class Panel {
 
   /** Duration-based intro offset; re-applied when the duration arrives, unless user/auto sync took over. */
   applyPrior(result: LyricsResult | null = this.state.result) {
-    if (this.manualSync || this.autoConfident) return;
+    if (this.manualSync || this.autoConfident || this.anchors.length) return;
     const dur = this.chapters.length ? undefined : this.currentDuration();
     const next = result ? priorOffset(dur, result.lines) : 0;
     if (next === this.syncOffset) return;
     this.syncOffset = next;
-    if (this.state.status === 'synced') this.refresh();
+    if (this.timed) this.refresh();
   }
 
   // ----- search -----
@@ -751,7 +819,7 @@ class Panel {
     this.searchSeq++;
     this.searchEl.hidden = true;
     this.root.classList.remove('uw-searching');
-    if (this.state.status === 'synced') this.tick();
+    if (this.timed) this.tick();
   }
 
   showSearch() {
@@ -783,9 +851,17 @@ class Panel {
     this.searchStatus.classList.toggle('uw-search-error', error);
     this.resultsEl.replaceChildren();
     const cur = this.state.result;
-    for (const r of list) {
+    const { exact, partial } = groupByMatch(list);
+    const items: (Cand | null)[] = partial.length ? [...exact, null, ...partial] : exact;
+    for (const r of items) {
+      if (!r) {
+        const d = el('li', 'uw-results-divider', '비슷한 결과');
+        d.setAttribute('role', 'separator');
+        this.resultsEl.append(d);
+        continue;
+      }
       const li = el('li');
-      const b = el('button', 'uw-result');
+      const b = el('button', r.match === 'partial' ? 'uw-result uw-result-partial' : 'uw-result');
       b.type = 'button';
       const chosen = !!cur && cur.title === r.title && cur.artist === r.artist && cur.kind === r.kind;
       if (chosen) { b.classList.add('uw-result-current'); b.setAttribute('aria-current', 'true'); }
@@ -819,7 +895,12 @@ class Panel {
     this.lyricsEl.replaceChildren();
     this.lineEls = [];
     this.current = -1;
-    this.root.dataset.status = s.status;
+    // karaoke only when the source is synced or anchors make it synced
+    this.timed = (s.status === 'synced' || s.status === 'plain') && s.result ? timedLines(s.result.kind, s.result.lines, this.anchors) : null;
+    const synced = !!this.timed;
+    this.root.dataset.status = synced ? 'synced' : s.status;
+    this.resetBtn.hidden = !this.anchors.length;
+    this.root.classList.toggle('uw-has-anchors', this.anchors.length > 0);
     this.introEl.hidden = true;
     this.root.classList.remove('uw-intro-on');
     this.lyricsEl.style.setProperty('--uw-y', '0px');
@@ -831,21 +912,24 @@ class Panel {
       this.lyricsEl.append(sk);
     } else if ((s.status === 'synced' || s.status === 'plain') && s.result) {
       if (s.overridden) this.titleEl.textContent = displayTitle(s.result.title);
-      for (const line of s.result.lines) {
+      if (!synced) this.lyricsEl.append(el('p', 'uw-hint', '줄을 길게 눌러 두세 곳만 맞추면 노래방처럼 따라가요'));
+      s.result.lines.forEach((line, i) => {
         const p = el('p', 'uw-line uw-future', line.text || '♪');
-        if (s.status === 'synced') {
-          p.dataset.time = String(line.time);
+        p.dataset.index = String(i);
+        if (this.anchors.some((a) => a.lineIndex === i)) p.classList.add('uw-anchored');
+        if (synced) {
+          p.dataset.time = String(this.timed![i].time);
           p.tabIndex = 0;
           p.setAttribute('role', 'button');
           p.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); p.click(); } });
         } else {
-          p.className = 'uw-line uw-plain';
+          p.classList.replace('uw-future', 'uw-plain');
         }
         this.lineEls.push(p);
         this.lyricsEl.append(p);
-      }
-      this.body.scrollTop = 0;
-      if (s.status === 'synced') { this.position(this.lineEls[0]); this.tick(); }
+      });
+      if (!synced) this.body.scrollTop = 0;
+      if (synced) { this.position(this.lineEls[0]); this.tick(); }
     } else if (s.status === 'notfound') {
       this.renderNotFound();
     } else if (s.status === 'error') {
