@@ -4,6 +4,7 @@ import { parseChapters, chapterAt } from '../lib/chapters';
 import { parseVideoTitle } from '../lib/title';
 import { lineIndexAt } from '../lib/lrc';
 import { shiftHue } from '../lib/color';
+import { blurLevel, staggerDelay, scrollOffset, fillTiming, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
 import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, type Action, type PanelState } from './state';
 
 const PARTICLES = 14;
@@ -23,7 +24,11 @@ function videoIdFromUrl(): string | null {
 }
 
 // ---------- page metadata ----------
-function readDescription(videoId: string): string {
+const COLLAPSE_KEY = 'uw:collapsed';
+let collapsedPref = false;
+const nav = new NavToken();
+
+function readDescriptionScript(videoId: string): string {
   for (const s of Array.from(document.querySelectorAll('script'))) {
     const t = s.textContent ?? '';
     if (t.includes('ytInitialPlayerResponse')) {
@@ -31,84 +36,147 @@ function readDescription(videoId: string): string {
       if (d) return d;
     }
   }
-  return document.querySelector('#description-inner')?.textContent ?? '';
+  return '';
 }
 
-function readMeta() {
-  const title = document.querySelector('ytd-watch-metadata h1')?.textContent?.trim() ?? '';
-  const channel = document.querySelector('#owner #channel-name a')?.textContent?.trim() ?? '';
-  return { title, channel };
+const domTitle = () => document.querySelector('ytd-watch-metadata h1')?.textContent?.trim() ?? '';
+const domChannel = () => document.querySelector('#owner #channel-name a')?.textContent?.trim() ?? '';
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function icon(d: string): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '18');
+  svg.setAttribute('height', '18');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(SVG_NS, 'path');
+  path.setAttribute('d', d);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', 'currentColor');
+  path.setAttribute('stroke-width', '2.2');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('stroke-linejoin', 'round');
+  svg.append(path);
+  return svg;
 }
+const ICON_SEARCH = 'M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM15.5 15.5 20 20';
+const ICON_CHEVRON = 'M6 15l6-6 6 6';
 
 // ---------- panel ----------
 class Panel {
   root = el('section', 'uw-panel');
+  bg = el('div', 'uw-bg');
   thumb = el('img', 'uw-thumb');
   titleEl = el('div', 'uw-title');
   subEl = el('div', 'uw-sub');
   body = el('div', 'uw-body');
   lyricsEl = el('div', 'uw-lyrics');
+  collapseBtn = el('button', 'uw-btn uw-chip uw-collapse-btn');
   lineEls: HTMLElement[] = [];
   current = -1;
   state: PanelState = initialState;
 
   // song context
   videoId: string;
+  token: number;
+  ready = false;
+  channel = '';
+  videoTitle = '';
   chapters: Chapter[] = [];
   chapterIndex = -1;
-  chaptersParsed = false;
   chapterStart = 0;
   basePalette: Palette | null = null;
   video: HTMLVideoElement | null = null;
   raf = 0;
   reqSeq = 0;
+  failures = 0;
+  retryTimer = 0;
+  manualOffset = 0;
+  manualTimer = 0;
   disposers: (() => void)[] = [];
 
-  constructor(videoId: string) {
+  constructor(videoId: string, token: number) {
     this.videoId = videoId;
+    this.token = token;
     this.root.setAttribute('aria-label', '가사');
+    const thumbUrl = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+    // animated blurred thumbnail mesh
+    for (let i = 1; i <= 3; i++) {
+      const img = el('img', `uw-mesh uw-mesh-${i}`);
+      img.alt = '';
+      img.decoding = 'async';
+      img.addEventListener('load', () => this.bg.classList.add('uw-bg-ready'), { once: true });
+      img.src = thumbUrl;
+      this.bg.append(img);
+    }
+    this.bg.append(el('div', 'uw-bg-shade'));
+    this.bg.setAttribute('aria-hidden', 'true');
+
     const header = el('header', 'uw-header');
     this.thumb.alt = '';
-    this.thumb.src = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
+    this.thumb.src = thumbUrl;
     const meta = el('div', 'uw-meta');
     meta.append(this.titleEl, this.subEl);
-    const searchBtn = el('button', 'uw-btn uw-search-btn', '⌕');
+    const searchBtn = el('button', 'uw-btn uw-chip uw-search-btn');
     searchBtn.type = 'button';
     searchBtn.setAttribute('aria-label', '가사 검색');
+    searchBtn.append(icon(ICON_SEARCH));
     searchBtn.addEventListener('click', () => this.showSearch());
-    const collapseBtn = el('button', 'uw-btn uw-collapse-btn', '⌃');
-    collapseBtn.type = 'button';
-    collapseBtn.setAttribute('aria-label', '가사 패널 접기');
-    collapseBtn.setAttribute('aria-expanded', 'true');
-    collapseBtn.addEventListener('click', () => {
-      const c = this.root.classList.toggle('uw-collapsed');
-      collapseBtn.setAttribute('aria-expanded', String(!c));
-      collapseBtn.setAttribute('aria-label', c ? '가사 패널 펼치기' : '가사 패널 접기');
-    });
-    header.append(this.thumb, meta, searchBtn, collapseBtn);
-    const footer = el('footer', 'uw-footer', '가사 제공 LRCLIB · 줄을 누르면 그 시점으로 이동해요');
+    this.collapseBtn.type = 'button';
+    this.collapseBtn.append(icon(ICON_CHEVRON));
+    this.collapseBtn.addEventListener('click', () => this.setCollapsed(!this.root.classList.contains('uw-collapsed'), true));
+    header.append(this.thumb, meta, searchBtn, this.collapseBtn);
     this.body.append(this.lyricsEl);
-    this.root.append(header, this.body, footer);
+    this.root.append(this.bg, header, this.body);
+    this.setCollapsed(collapsedPref, false);
     this.lyricsEl.addEventListener('click', (e) => {
       const line = (e.target as HTMLElement).closest<HTMLElement>('.uw-line');
       const t = line?.dataset.time;
       if (t != null && this.video && Number(t) >= 0) this.video.currentTime = Number(t) + this.chapterStart;
     });
+    this.body.addEventListener('wheel', (e) => this.onUserScroll(e), { passive: false });
+    const onVis = () => this.updatePaused();
+    document.addEventListener('visibilitychange', onVis);
+    this.disposers.push(() => document.removeEventListener('visibilitychange', onVis));
   }
+
+  get alive(): boolean { return nav.isCurrent(this.token) && this.root.isConnected; }
 
   mount(): boolean {
     const host = document.querySelector('#secondary-inner') ?? document.querySelector('#secondary');
     if (!host) return false;
     host.prepend(this.root);
     this.attachVideo();
-    this.resolveSong();
+    // re-read persisted collapse state (another tab may have changed it)
+    chrome.storage?.local.get(COLLAPSE_KEY).then((r) => {
+      if (this.alive) this.setCollapsed(Boolean(r[COLLAPSE_KEY]), false);
+    }).catch(() => {});
+    void this.identify();
     return true;
   }
 
   destroy() {
     cancelAnimationFrame(this.raf);
+    clearTimeout(this.retryTimer);
+    clearTimeout(this.manualTimer);
     this.disposers.forEach((d) => d());
     this.root.remove();
+  }
+
+  setCollapsed(c: boolean, persist: boolean) {
+    this.root.classList.toggle('uw-collapsed', c);
+    this.collapseBtn.setAttribute('aria-expanded', String(!c));
+    this.collapseBtn.setAttribute('aria-label', c ? '가사 패널 펼치기' : '가사 패널 접기');
+    this.updatePaused();
+    if (persist) {
+      collapsedPref = c;
+      chrome.storage?.local.set({ [COLLAPSE_KEY]: c }).catch(() => {});
+    }
+  }
+
+  updatePaused() {
+    this.root.classList.toggle('uw-idle', document.hidden || this.root.classList.contains('uw-collapsed'));
   }
 
   dispatch(a: Action) {
@@ -122,29 +190,27 @@ class Panel {
     if (!v) return;
     this.video = v;
     const loop = () => { this.tick(); this.raf = requestAnimationFrame(loop); };
-    const onPlay = () => { cancelAnimationFrame(this.raf); this.raf = requestAnimationFrame(loop); };
-    const onPause = () => { cancelAnimationFrame(this.raf); this.tick(); };
+    const sync = () => this.root.classList.toggle('uw-vpaused', v.paused);
+    const onPlay = () => { sync(); cancelAnimationFrame(this.raf); this.raf = requestAnimationFrame(loop); };
+    const onPause = () => { sync(); cancelAnimationFrame(this.raf); this.tick(); };
     const onTime = () => { if (v.paused) this.tick(); };
-    v.addEventListener('play', onPlay);
-    v.addEventListener('pause', onPause);
-    v.addEventListener('ended', onPause);
-    v.addEventListener('timeupdate', onTime);
-    v.addEventListener('seeked', onTime);
-    this.disposers.push(() => {
-      v.removeEventListener('play', onPlay); v.removeEventListener('pause', onPause);
-      v.removeEventListener('ended', onPause); v.removeEventListener('timeupdate', onTime);
-      v.removeEventListener('seeked', onTime);
-    });
+    const refill = () => { this.tick(); this.applyFill(true); };
+    const evs: [string, () => void][] = [
+      ['play', onPlay], ['pause', onPause], ['ended', onPause], ['timeupdate', onTime],
+      ['seeked', refill], ['ratechange', refill],
+    ];
+    for (const [n, f] of evs) v.addEventListener(n, f);
+    this.disposers.push(() => { for (const [n, f] of evs) v.removeEventListener(n, f); });
+    sync();
     if (!v.paused) onPlay();
   }
 
   tick() {
     const v = this.video;
-    if (!v) return;
+    if (!v || !this.ready) return;
     const t = v.currentTime;
-    if (this.chaptersParsed && this.chapters.length) {
-      const hit = chapterAt(this.chapters, t);
-      const idx = hit?.index ?? -1;
+    if (this.chapters.length) {
+      const idx = chapterAt(this.chapters, t)?.index ?? -1;
       if (idx !== this.chapterIndex) { this.resolveSong(); return; }
     }
     if (this.state.status !== 'synced' || !this.state.result) return;
@@ -153,30 +219,73 @@ class Panel {
 
   setCurrent(i: number) {
     if (i === this.current) return;
-    const prev = this.lineEls[this.current];
-    prev?.classList.remove('uw-current');
+    const prevIdx = this.current;
+    const prev = this.lineEls[prevIdx];
+    const seek = isSeek(prevIdx, i);
     this.current = i;
+    if (prev) {
+      prev.classList.remove('uw-current');
+      // finished line snaps to white, then fades to the past style
+      if (!seek) {
+        prev.classList.add('uw-done');
+        setTimeout(() => prev.classList.remove('uw-done'), 250);
+      }
+    }
     this.lineEls.forEach((e, k) => {
       e.classList.toggle('uw-past', k < i);
       e.classList.toggle('uw-future', k > i);
+      e.style.setProperty('--blur', `${blurLevel(k, i)}px`);
+      e.style.setProperty('--delay', `${staggerDelay(k, i, seek)}s`);
     });
     const cur = this.lineEls[i];
+    this.position(cur ?? this.lineEls[0]);
     if (!cur) return;
     cur.classList.add('uw-current');
-    this.scrollTo(cur);
+    this.applyFill(false);
     if (prev || i === 0) this.burst(cur);
   }
 
-  scrollTo(line: HTMLElement) {
-    const b = this.body;
-    const top = line.offsetTop - b.clientHeight / 2 + line.clientHeight / 2;
-    b.scrollTo({ top, behavior: reducedMotion() ? 'auto' : 'smooth' });
+  /** Start (or restart) the karaoke fill on the active line. */
+  applyFill(restart: boolean) {
+    const cur = this.lineEls[this.current];
+    const res = this.state.result;
+    if (!cur || !res || this.state.status !== 'synced' || !this.video) return;
+    const f = fillTiming(res.lines, this.current, this.video.currentTime - this.chapterStart, this.video.playbackRate);
+    if (!f) return;
+    cur.style.setProperty('--uw-dur', `${f.duration}s`);
+    cur.style.setProperty('--uw-fill-delay', `${f.delay}s`);
+    if (restart) {
+      cur.classList.remove('uw-current');
+      void cur.offsetWidth; // reflow to restart the animation
+      cur.classList.add('uw-current');
+    }
+  }
+
+  position(line: HTMLElement | undefined) {
+    if (!line) return;
+    const y = scrollOffset(line.offsetTop, this.body.clientHeight);
+    this.lyricsEl.style.setProperty('--uw-y', `${y}px`);
+  }
+
+  onUserScroll(e: WheelEvent) {
+    if (this.state.status !== 'synced') return;
+    e.preventDefault();
+    this.manualOffset -= e.deltaY;
+    const max = this.lyricsEl.scrollHeight;
+    this.manualOffset = Math.max(-max, Math.min(max, this.manualOffset));
+    this.lyricsEl.style.setProperty('--uw-m', `${this.manualOffset}px`);
+    this.root.classList.add('uw-manual');
+    clearTimeout(this.manualTimer);
+    this.manualTimer = window.setTimeout(() => {
+      this.manualOffset = 0;
+      this.lyricsEl.style.setProperty('--uw-m', '0px');
+      this.root.classList.remove('uw-manual');
+    }, 3000);
   }
 
   burst(line: HTMLElement) {
     if (reducedMotion()) return;
     const box = el('div', 'uw-burst');
-    box.style.top = `${line.offsetTop + line.offsetHeight / 2}px`;
     for (const { dx, dy } of burstVectors(PARTICLES)) {
       const p = el('span', 'uw-particle');
       p.style.setProperty('--dx', `${dx}px`);
@@ -184,15 +293,50 @@ class Panel {
       p.style.left = `${20 + Math.random() * 60}%`;
       box.append(p);
     }
-    this.lyricsEl.append(box);
+    line.append(box);
     setTimeout(() => box.remove(), BURST_MS);
   }
 
-  // ----- song resolution -----
+  // ----- song identification -----
+  /** Per-navigation: oEmbed title/channel by videoId, then chapters only from a DOM that matches. */
+  async identify() {
+    let title = '';
+    let channel = '';
+    try {
+      const res = await send({ type: 'video:meta', videoId: this.videoId });
+      if (!this.alive) return;
+      if (res.ok) { title = res.title; channel = res.channel; }
+    } catch { /* fall through */ }
+    if (!this.alive) return;
+
+    let description = '';
+    if (title) {
+      // only trust the DOM once its h1 has caught up with this video
+      for (let waited = 0; waited <= 5000; waited += 250) {
+        if (titlesMatch(domTitle(), title)) {
+          description = readDescriptionScript(this.videoId) || (document.querySelector('#description-inner')?.textContent ?? '');
+          break;
+        }
+        await sleep(250);
+        if (!this.alive) return;
+      }
+    } else {
+      // oEmbed failed: wait briefly for the DOM, accept it, but never trust its description
+      await sleep(1500);
+      if (!this.alive) return;
+      title = domTitle();
+      channel = domChannel();
+      description = readDescriptionScript(this.videoId);
+    }
+    this.videoTitle = title;
+    this.channel = channel;
+    this.chapters = description ? parseChapters(description) : [];
+    this.ready = true;
+    this.resolveSong();
+  }
+
   resolveSong() {
-    const { title, channel } = readMeta();
-    if (!title) { setTimeout(() => this.root.isConnected && this.resolveSong(), 500); return; }
-    if (!this.chaptersParsed) { this.chapters = parseChapters(readDescription(this.videoId)); this.chaptersParsed = true; }
+    if (!this.alive || !this.ready) return;
     const t = this.video?.currentTime ?? 0;
     const dur = this.video && isFinite(this.video.duration) ? this.video.duration : undefined;
     let query: SongQuery;
@@ -203,38 +347,49 @@ class Panel {
       this.chapterStart = hit.chapter.start;
       hueIndex = hit.index;
       const end = hit.end ?? dur;
-      query = { ...parseVideoTitle(hit.chapter.title, channel), duration: end != null ? Math.round(end - hit.chapter.start) : undefined };
+      query = { ...parseVideoTitle(hit.chapter.title, this.channel), duration: end != null ? Math.round(end - hit.chapter.start) : undefined };
       this.subEl.textContent = `${query.artist} · ${hit.index + 1} / ${this.chapters.length}곡`;
     } else {
       this.chapterIndex = -1;
       this.chapterStart = 0;
-      query = { ...parseVideoTitle(title, channel), duration: dur ? Math.round(dur) : undefined };
-      this.subEl.textContent = `${query.artist} · 1 / 1곡`;
+      query = { ...parseVideoTitle(this.videoTitle, this.channel), duration: dur ? Math.round(dur) : undefined };
+      this.subEl.textContent = query.artist;
     }
     this.titleEl.textContent = query.title;
-    this.applyPalette(hueIndex);
+    void this.applyPalette(hueIndex);
     if (sameQuery(query, this.state.query) && this.state.status !== 'error') return;
-    this.load(query);
+    this.failures = 0;
+    void this.load(query);
   }
 
   async load(query: SongQuery) {
     const seq = ++this.reqSeq;
+    clearTimeout(this.retryTimer);
     this.dispatch({ type: 'load', query });
+    let error: string | null = null;
     try {
       const res = await send({ type: 'lyrics:get', query });
-      if (seq !== this.reqSeq) return;
-      if (res.ok) this.dispatch({ type: 'loaded', result: res.result });
-      else this.dispatch({ type: 'failed', error: res.error });
+      if (seq !== this.reqSeq || !this.alive) return;
+      if (res.ok) { this.failures = 0; this.dispatch({ type: 'loaded', result: res.result }); return; }
+      error = res.error;
     } catch (e) {
-      if (seq === this.reqSeq) this.dispatch({ type: 'failed', error: String(e) });
+      if (seq !== this.reqSeq || !this.alive) return;
+      error = String(e);
     }
+    this.failures++;
+    if (shouldAutoRetry(this.failures)) {
+      // keep the loading skeleton up; try once more quietly
+      this.retryTimer = window.setTimeout(() => { if (this.alive && seq === this.reqSeq) void this.load(query); }, 3000);
+      return;
+    }
+    this.dispatch({ type: 'failed', error });
   }
 
   async applyPalette(index: number) {
     if (!this.basePalette) {
       try {
         const res = await send({ type: 'palette:get', videoId: this.videoId });
-        if (!res.ok) return;
+        if (!res.ok || !this.alive) return;
         this.basePalette = res.palette;
       } catch { return; }
     }
@@ -250,15 +405,16 @@ class Panel {
     this.dispatch({ type: 'search' });
     try {
       const res = await send({ type: 'lyrics:search', q });
+      if (!this.alive) return;
       if (res.ok) this.dispatch({ type: 'searchDone', results: res.results });
       else this.dispatch({ type: 'searchFailed', error: res.error });
     } catch (e) {
-      this.dispatch({ type: 'searchFailed', error: String(e) });
+      if (this.alive) this.dispatch({ type: 'searchFailed', error: String(e) });
     }
   }
 
   showSearch() {
-    this.root.classList.remove('uw-collapsed');
+    this.setCollapsed(false, true);
     this.dispatch({ type: 'loaded', result: null });
   }
 
@@ -269,6 +425,7 @@ class Panel {
     this.lineEls = [];
     this.current = -1;
     this.root.dataset.status = s.status;
+    this.lyricsEl.style.setProperty('--uw-y', '0px');
     if (s.status === 'loading' || s.status === 'idle') {
       const sk = el('div', 'uw-skeleton');
       sk.setAttribute('aria-busy', 'true');
@@ -291,7 +448,7 @@ class Panel {
         this.lyricsEl.append(p);
       }
       this.body.scrollTop = 0;
-      this.tick();
+      if (s.status === 'synced') { this.position(this.lineEls[0]); this.tick(); }
     } else if (s.status === 'notfound') {
       this.renderNotFound(s);
     } else if (s.status === 'error') {
@@ -345,18 +502,31 @@ let panel: Panel | null = null;
 function sync() {
   const id = videoIdFromUrl();
   if (panel && panel.videoId === id && panel.root.isConnected) return;
+  // new navigation: invalidate every in-flight result and reset immediately
+  const token = nav.next();
   panel?.destroy();
   panel = null;
   if (!id) return;
-  const p = new Panel(id);
+  const p = new Panel(id, token);
   panel = p;
   let tries = 0;
   const tryMount = () => {
-    if (panel !== p) return;
+    if (panel !== p || !nav.isCurrent(token)) return;
     if (!p.mount() && ++tries < 40) setTimeout(tryMount, 250);
   };
   tryMount();
 }
 
+chrome.storage?.local.get(COLLAPSE_KEY).then((r) => {
+  collapsedPref = Boolean(r[COLLAPSE_KEY]);
+  panel?.setCollapsed(collapsedPref, false);
+}).catch(() => {});
+chrome.storage?.onChanged.addListener((changes, area) => {
+  if (area === 'local' && COLLAPSE_KEY in changes) {
+    collapsedPref = Boolean(changes[COLLAPSE_KEY].newValue);
+    panel?.setCollapsed(collapsedPref, false);
+  }
+});
+document.addEventListener('yt-navigate-start', () => { nav.next(); panel?.destroy(); panel = null; });
 document.addEventListener('yt-navigate-finish', sync);
 sync();
