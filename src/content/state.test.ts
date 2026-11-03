@@ -51,3 +51,15 @@ describe('helpers', () => {
     expect(v[0]).toEqual({ dx: 65, dy: 0 });
   });
 });
+
+import { displayTitle, displayArtist } from './state';
+describe('header display', () => {
+  it('dedupes repeated parenthetical', () => {
+    expect(displayTitle('FASHO (FASHO)')).toBe('FASHO');
+    expect(displayTitle('셋 셀테니 (1, 2, 3!)')).toBe('셋 셀테니 (1, 2, 3!)');
+  });
+  it('shortens long credits', () => {
+    expect(displayArtist('GroovyRoom, pH-1, HAON, TRADE L, Woodie Gochild, BIG Naughty, Sik-K, Jay Park, and lIlBOI')).toBe('GroovyRoom 외 8명');
+    expect(displayArtist('C Jamm, BewhY')).toBe('C Jamm, BewhY');
+  });
+});

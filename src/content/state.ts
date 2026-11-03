@@ -69,3 +69,16 @@ export function burstVectors(n: number, rand: () => number = Math.random): { dx:
   }
   return out;
 }
+
+/** "FASHO (FASHO)" -> "FASHO": drop a trailing parenthetical that only repeats the title. */
+export function displayTitle(t: string): string {
+  const m = t.match(/^(.*?)\s*\(([^()]*)\)\s*$/);
+  if (m && m[1] && m[1].trim().toLowerCase() === m[2].trim().toLowerCase()) return m[1].trim();
+  return t.trim();
+}
+
+/** Long credit lists -> "GroovyRoom 외 8명". */
+export function displayArtist(a: string): string {
+  const parts = a.split(/\s*(?:,|&|\band\b|×|\/)\s*/i).map((s) => s.trim()).filter(Boolean);
+  return parts.length > 2 ? `${parts[0]} 외 ${parts.length - 1}명` : a.trim();
+}

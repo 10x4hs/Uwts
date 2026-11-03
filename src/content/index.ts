@@ -8,7 +8,7 @@ import { shiftHue } from '../lib/color';
 import { blurLevel, staggerDelay, scrollOffset, fillTiming, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
 import { segments, unitsToChar, priorOffset, estimateOffset, smoothOffset, isIntro, FillTracker, formatOffset, type Segment } from './align';
 import { VocalTracker } from './audio';
-import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, type Action, type PanelState } from './state';
+import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, displayTitle, displayArtist, type Action, type PanelState } from './state';
 
 const PARTICLES = 14;
 const BURST_MS = 1800;
@@ -584,8 +584,8 @@ class Panel {
         this.autoConfident = false;
         this.applyPrior(res.result);
         if (res.result) {
-          this.titleEl.textContent = res.result.title;
-          if (this.chapterIndex < 0) this.subEl.textContent = res.result.artist;
+          this.titleEl.textContent = displayTitle(res.result.title);
+          if (this.chapterIndex < 0) this.subEl.textContent = displayArtist(res.result.artist);
         }
         this.dispatch({ type: 'loaded', result: res.result });
         if (!this.searchEl.hidden) this.showCandidates();
@@ -733,8 +733,8 @@ class Panel {
     this.closeSearch();
     this.autoConfident = false;
     this.applyPrior(r);
-    this.titleEl.textContent = r.title;
-    if (this.chapterIndex < 0) this.subEl.textContent = r.artist;
+    this.titleEl.textContent = displayTitle(r.title);
+    if (this.chapterIndex < 0) this.subEl.textContent = displayArtist(r.artist);
     this.dispatch({ type: 'choose', result: r });
     const key = overrideKey(this.videoId, this.lastCtx?.chapterTitle);
     chrome.storage?.local.set({ [key]: r }).catch(() => { /* quota */ });
@@ -757,7 +757,7 @@ class Panel {
       for (let i = 0; i < 6; i++) sk.append(el('div', 'uw-skel-line'));
       this.lyricsEl.append(sk);
     } else if ((s.status === 'synced' || s.status === 'plain') && s.result) {
-      if (s.overridden) this.titleEl.textContent = s.result.title;
+      if (s.overridden) this.titleEl.textContent = displayTitle(s.result.title);
       for (const line of s.result.lines) {
         const p = el('p', 'uw-line uw-future', line.text || '♪');
         if (s.status === 'synced') {

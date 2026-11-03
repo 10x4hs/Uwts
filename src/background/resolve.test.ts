@@ -33,9 +33,9 @@ describe('resolveFresh', () => {
   });
   it('respects the deadline', async () => {
     const t0 = Date.now();
-    const r = await resolveFresh(ctx, deps({ searchTracks: never, getTrack: never, searchSongs: never }));
+    // nothing found by the deadline -> reject so the panel retries (never cache a possibly-wrong "not found")
+    await expect(resolveFresh(ctx, deps({ searchTracks: never, getTrack: never, searchSongs: never }))).rejects.toThrow();
     expect(Date.now() - t0).toBeLessThan(800);
-    expect(r.partial).toBe(true);
   });
   it('rejects when every source fails', async () => {
     const fail = async () => { throw new Error('503'); };

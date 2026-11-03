@@ -107,3 +107,21 @@ export function rank<T extends ScoreInput>(cands: T[], ctx: ScoreContext): { ite
     .filter((x) => x.score >= MIN_SCORE)
     .sort((a, b) => b.score - a.score);
 }
+
+const HANGUL_ALL = /\p{Script=Hangul}/gu;
+const KANA = /[\p{Script=Hiragana}\p{Script=Katakana}]/gu;
+const HAN = /\p{Script=Han}/gu;
+const count = (s: string, re: RegExp) => (s.match(re) ?? []).length;
+
+/**
+ * Reject lyrics written in a different script than the video implies, e.g. the Japanese
+ * version of a K-pop song ("1, 2, 3!" by V.I) for a Korean MV. Only fires when the video
+ * title has Hangul and no kana, and the lyrics are dominated by kana/Han with little Hangul.
+ */
+export function scriptMismatch(lyricsText: string, videoText: string): boolean {
+  const vHangul = count(videoText, HANGUL_ALL), vKana = count(videoText, KANA);
+  if (vHangul === 0 || vKana > 0) return false;
+  const h = count(lyricsText, HANGUL_ALL), k = count(lyricsText, KANA), c = count(lyricsText, HAN);
+  const foreign = k + c;
+  return foreign >= 20 && foreign > h * 3;
+}

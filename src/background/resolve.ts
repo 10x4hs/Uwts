@@ -1,6 +1,6 @@
 import type { LyricsResult, ResolveContext, SongQuery } from '../shared/types';
 import { buildQueries } from '../lib/queries';
-import { rank, scoreCandidate, HIGH_SCORE, MIN_SCORE, type ScoreContext } from '../lib/score';
+import { rank, scoreCandidate, scriptMismatch, HIGH_SCORE, MIN_SCORE, type ScoreContext } from '../lib/score';
 import { resolveKey, overrideKey } from '../lib/keys';
 import { searchTracks, getTrack, toResult, type LrclibTrack } from './lrclib';
 import { searchSongs, lyricFor, type NeteaseSong } from './netease';
@@ -72,8 +72,9 @@ export async function resolveFresh(ctx: ResolveContext, deps: ResolveDeps = defa
       const best = candidates[0] ?? null;
       console.debug(`[uwts] resolve ${ctx.videoId} ${why} in ${Math.round(deps.now() - t0)}ms`,
         best ? `${best.artist} - ${best.title} (${best.kind}, ${best.score})` : 'null', plan.queries);
-      if (!best && failures === tasks && tasks > 0) {
-        // every request failed: let the caller retry instead of caching "not found"
+      if (!best && (failures > 0 || why === 'deadline')) {
+        // a source failed or timed out (LRCLIB is often 503-overloaded): report an error so the
+        // panel retries, instead of caching a possibly-wrong "not found"
         resolve(Promise.reject(new Error('all lyric sources failed')) as never);
         return;
       }
@@ -85,8 +86,10 @@ export async function resolveFresh(ctx: ResolveContext, deps: ResolveDeps = defa
       const top = rank([...pool.values()], sctx)[0];
       if (top && top.item.kind === 'synced' && top.score >= SOFT_SCORE) finish('soft');
     }, SOFT_MS);
+    const videoText = `${ctx.videoTitle} ${ctx.chapterTitle ?? ''}`;
     const add = (c: Candidate | null) => {
       if (!c || done) return;
+      if (scriptMismatch(c.lines.map((l) => l.text).join(' '), videoText)) return; // e.g. Japanese version of a K-pop MV
       const k = candKey(c);
       if (!pool.has(k)) pool.set(k, c);
       if (c.kind === 'synced' && scoreCandidate(c, sctx) >= HIGH_SCORE) finish('early');

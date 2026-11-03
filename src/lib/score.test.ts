@@ -75,3 +75,17 @@ describe('rank', () => {
     expect(r.find((x) => x.item.title === 'Perfect')).toBeUndefined();
   });
 });
+
+import { scriptMismatch } from './score';
+describe('scriptMismatch', () => {
+  const ja = '細胞が求めてるよと 言っても分かんないかな? 高嶺の花 されど挑むオレの理想は高い 今さら気づいた 結局誰もが動物って';
+  it('rejects Japanese lyrics for a Korean-titled MV', () => {
+    expect(scriptMismatch(ja, "SEUNGRI - '셋 셀테니 (1, 2, 3!)' M/V")).toBe(true);
+  });
+  it('keeps Korean lyrics with English lines', () => {
+    expect(scriptMismatch('넌 말해줘도 모를 거야 One, two, three 내가 셋 셀테니', "SEUNGRI - '셋 셀테니 (1, 2, 3!)' M/V")).toBe(false);
+  });
+  it('does nothing for non-Hangul titles', () => {
+    expect(scriptMismatch(ja, 'Ed Sheeran - Shape of You')).toBe(false);
+  });
+});
