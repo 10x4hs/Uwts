@@ -317,6 +317,10 @@ class Panel {
       .map((o) => ({ t: o.t - this.chapterStart, s: o.s }));
     if (onsets.length < 2 || onsets[onsets.length - 1].t - Math.min(...onsets.map((o) => o.t)) < MIN_COVERAGE) return;
     const e = estimateOffset(onsets, res.lines, this.syncOffset);
+    // Debug breadcrumbs for verification (DevTools / automation): current & candidate offsets.
+    this.root.dataset.syncOffset = this.syncOffset.toFixed(1);
+    this.root.dataset.syncEstimate = `${e.offset.toFixed(1)}${e.confident ? '' : '?'}`;
+    this.root.dataset.syncOnsets = String(onsets.length);
     if (!e.confident) return;
     const next = smoothOffset(this.syncOffset, e.offset);
     if (next === this.syncOffset) return;
