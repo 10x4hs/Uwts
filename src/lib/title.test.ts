@@ -22,3 +22,15 @@ describe('parseVideoTitle', () => {
     expect(p('Hello (Official Video)', 'Adele Official')).toEqual({ artist: 'Adele', title: 'Hello' });
   });
 });
+
+import { parseVideoTitle as pvt } from './title';
+describe('k-pop quoted titles', () => {
+  it.each([
+    ["RESCENE (리센느) 'With' Official MV", 'RESCENE', 'With'],
+    ["RESCENE(리센느) 'Glow Up' MV", 'RESCENE', 'Glow Up'],
+    ['IVE 아이브 ‘I AM’ MV', 'IVE 아이브', 'I AM'],
+    ["Jung Kook (정국) 'Seven (feat. Latto)' Official MV", 'Jung Kook', 'Seven (feat. Latto)'],
+  ])('%s', (input, artist, title) => {
+    expect(pvt(input, 'RESCENE')).toEqual({ artist, title });
+  });
+});

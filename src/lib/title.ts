@@ -18,7 +18,15 @@ export function parseVideoTitle(videoTitle: string, channel: string): SongQuery 
   t = t.replace(/[[【][^\]】]*[\]】]/g, (m) => (NOISE.test(m) || /^[[【]\s*[^\]】]*[\]】]$/.test(m) ? ' ' : m));
   t = t.replace(/\(([^)]*)\)/g, (m, inner: string) => (NOISE.test(inner) && !/\b(feat|ft)\.?\b/i.test(inner) ? ' ' : m));
   t = t.replace(/\bofficial\s+(music\s+)?video\b/gi, ' ').replace(/(^|\s)M\/?V(\s|$)/g, ' ');
+  t = t.replace(/\bofficial\b/gi, ' ');
   t = clean(t);
+
+  // K-pop style: Artist (별칭) 'Title' ...  →  artist before the quote, title inside it
+  const q = t.match(/^(.+?)\s*['‘’"“”「『〈《](.+?)['‘’"“”」』〉》]/);
+  if (q && !/\s[-–—]\s/.test(q[1])) {
+    const artist = clean(q[1].replace(/\s*\([^)]*\)\s*$/, '')) || clean(q[1]);
+    return { artist, title: clean(q[2]) };
+  }
 
   const m = t.match(/^(.+?)\s+[-–—_]\s+(.+)$/);
   if (m) {
