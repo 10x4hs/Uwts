@@ -5,6 +5,8 @@ import { parseVideoTitle } from '../lib/title';
 import { lineIndexAt } from '../lib/lrc';
 import { shiftHue } from '../lib/color';
 import { blurLevel, staggerDelay, scrollOffset, fillTiming, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
+import { segments, unitsToChar, priorOffset, estimateOffset, smoothOffset, isIntro, FillTracker, formatOffset, type Segment } from './align';
+import { VocalTracker } from './audio';
 import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, type Action, type PanelState } from './state';
 
 const PARTICLES = 14;
@@ -25,6 +27,10 @@ function videoIdFromUrl(): string | null {
 
 // ---------- page metadata ----------
 const COLLAPSE_KEY = 'uw:collapsed';
+const offsetKey = (id: string) => `uw:offset:${id}`;
+const LONG_PRESS_MS = 550;
+const ESTIMATE_MS = 15000;
+const MIN_COVERAGE = 20;
 let collapsedPref = false;
 const nav = new NavToken();
 
@@ -96,6 +102,19 @@ class Panel {
   manualTimer = 0;
   disposers: (() => void)[] = [];
 
+  // sync: lyricTime = videoTime - chapterStart - syncOffset
+  syncOffset = 0;
+  manualSync = false;
+  tracker: VocalTracker | null = null;
+  fill: FillTracker | null = null;
+  fillSegs: Segment[] = [];
+  fillCum: number[] = [];
+  lastLyricT = NaN;
+  estTimer = 0;
+  toastTimer = 0;
+  introEl = el('div', 'uw-intro', '♪');
+  toastEl = el('div', 'uw-toast');
+
   constructor(videoId: string, token: number) {
     this.videoId = videoId;
     this.token = token;
@@ -127,13 +146,38 @@ class Panel {
     this.collapseBtn.append(icon(ICON_CHEVRON));
     this.collapseBtn.addEventListener('click', () => this.setCollapsed(!this.root.classList.contains('uw-collapsed'), true));
     header.append(this.thumb, meta, searchBtn, this.collapseBtn);
-    this.body.append(this.lyricsEl);
-    this.root.append(this.bg, header, this.body);
+    const syncRow = el('div', 'uw-sync');
+    for (const [label, d, aria] of [['−0.5s', -0.5, '가사 0.5초 빠르게'], ['+0.5s', 0.5, '가사 0.5초 늦게']] as const) {
+      const b = el('button', 'uw-btn uw-chip uw-sync-btn', label);
+      b.type = 'button';
+      b.setAttribute('aria-label', aria);
+      b.addEventListener('click', () => this.setManualOffset(this.syncOffset + d));
+      syncRow.append(b);
+    }
+    this.introEl.setAttribute('aria-hidden', 'true');
+    this.toastEl.setAttribute('role', 'status');
+    this.body.append(this.lyricsEl, this.introEl);
+    this.root.append(this.bg, header, syncRow, this.body, this.toastEl);
     this.setCollapsed(collapsedPref, false);
+    let pressTimer = 0;
+    let longPressed = false;
+    this.lyricsEl.addEventListener('pointerdown', (e) => {
+      const line = (e.target as HTMLElement).closest<HTMLElement>('.uw-line');
+      longPressed = false;
+      clearTimeout(pressTimer);
+      if (!line?.dataset.time) return;
+      pressTimer = window.setTimeout(() => { longPressed = true; this.lineSungNow(Number(line.dataset.time)); }, LONG_PRESS_MS);
+    });
+    const cancelPress = () => clearTimeout(pressTimer);
+    this.lyricsEl.addEventListener('pointerup', cancelPress);
+    this.lyricsEl.addEventListener('pointerleave', cancelPress);
+    this.lyricsEl.addEventListener('pointercancel', cancelPress);
+    this.lyricsEl.addEventListener('contextmenu', (e) => { if (longPressed) e.preventDefault(); });
     this.lyricsEl.addEventListener('click', (e) => {
+      if (longPressed) { longPressed = false; return; }
       const line = (e.target as HTMLElement).closest<HTMLElement>('.uw-line');
       const t = line?.dataset.time;
-      if (t != null && this.video && Number(t) >= 0) this.video.currentTime = Number(t) + this.chapterStart;
+      if (t != null && this.video && Number(t) >= 0) this.video.currentTime = Number(t) + this.chapterStart + this.syncOffset;
     });
     this.body.addEventListener('wheel', (e) => this.onUserScroll(e), { passive: false });
     const onVis = () => this.updatePaused();
@@ -148,6 +192,14 @@ class Panel {
     if (!host) return false;
     host.prepend(this.root);
     this.attachVideo();
+    chrome.storage?.local.get(offsetKey(this.videoId)).then((r) => {
+      const v = r[offsetKey(this.videoId)];
+      if (!this.alive || typeof v !== 'number') return;
+      this.manualSync = true;
+      this.syncOffset = v;
+      this.refresh();
+    }).catch(() => {});
+    this.estTimer = window.setInterval(() => this.autoEstimate(), ESTIMATE_MS);
     // re-read persisted collapse state (another tab may have changed it)
     chrome.storage?.local.get(COLLAPSE_KEY).then((r) => {
       if (this.alive) this.setCollapsed(Boolean(r[COLLAPSE_KEY]), false);
@@ -160,6 +212,9 @@ class Panel {
     cancelAnimationFrame(this.raf);
     clearTimeout(this.retryTimer);
     clearTimeout(this.manualTimer);
+    clearTimeout(this.toastTimer);
+    clearInterval(this.estTimer);
+    this.tracker?.destroy();
     this.disposers.forEach((d) => d());
     this.root.remove();
   }
@@ -189,6 +244,7 @@ class Panel {
     const v = document.querySelector<HTMLVideoElement>('video.html5-main-video') ?? document.querySelector('video');
     if (!v) return;
     this.video = v;
+    this.tracker = new VocalTracker(v);
     const loop = () => { this.tick(); this.raf = requestAnimationFrame(loop); };
     const sync = () => this.root.classList.toggle('uw-vpaused', v.paused);
     const onPlay = () => { sync(); cancelAnimationFrame(this.raf); this.raf = requestAnimationFrame(loop); };
@@ -214,7 +270,93 @@ class Panel {
       if (idx !== this.chapterIndex) { this.resolveSong(); return; }
     }
     if (this.state.status !== 'synced' || !this.state.result) return;
-    this.setCurrent(lineIndexAt(this.state.result.lines, t - this.chapterStart));
+    const lt = this.lyricTime();
+    const lines = this.state.result.lines;
+    this.root.classList.toggle('uw-intro-on', isIntro(lines, lt));
+    this.setCurrent(lineIndexAt(lines, lt));
+    this.stepVoiceFill(lt);
+  }
+
+  lyricTime(): number {
+    return (this.video?.currentTime ?? 0) - this.chapterStart - this.syncOffset;
+  }
+
+  /** Re-evaluate the active line and restart the fill after an offset change. */
+  refresh() {
+    this.current = -2; // force setCurrent to re-apply
+    this.tick();
+    this.applyFill(true);
+  }
+
+  showToast(text: string) {
+    this.toastEl.textContent = text;
+    this.toastEl.classList.add('uw-toast-on');
+    clearTimeout(this.toastTimer);
+    this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('uw-toast-on'), 1400);
+  }
+
+  setManualOffset(o: number) {
+    this.syncOffset = Math.round(o * 10) / 10;
+    this.manualSync = true;
+    chrome.storage?.local.set({ [offsetKey(this.videoId)]: this.syncOffset }).catch(() => {});
+    this.showToast(formatOffset(this.syncOffset));
+    this.refresh();
+  }
+
+  /** "This line is being sung now". */
+  lineSungNow(lineTime: number) {
+    if (!this.video || lineTime < 0) return;
+    this.setManualOffset(this.video.currentTime - this.chapterStart - lineTime);
+  }
+
+  autoEstimate() {
+    const res = this.state.result;
+    if (this.manualSync || !this.tracker?.ready || this.state.status !== 'synced' || !res) return;
+    const onsets = this.tracker.onsets
+      .filter((o) => o.t >= this.chapterStart)
+      .map((o) => ({ t: o.t - this.chapterStart, s: o.s }));
+    if (onsets.length < 2 || onsets[onsets.length - 1].t - Math.min(...onsets.map((o) => o.t)) < MIN_COVERAGE) return;
+    const e = estimateOffset(onsets, res.lines, this.syncOffset);
+    if (!e.confident) return;
+    const next = smoothOffset(this.syncOffset, e.offset);
+    if (next === this.syncOffset) return;
+    this.syncOffset = next;
+    this.refresh();
+  }
+
+  /** Voice-driven fill on the active line; falls back to the CSS linear wipe without audio. */
+  stepVoiceFill(lt: number) {
+    const cur = this.lineEls[this.current];
+    const prevT = this.lastLyricT;
+    this.lastLyricT = lt;
+    if (!cur || !this.fill || reducedMotion()) return;
+    const dt = Math.min(0.1, Math.max(0, lt - prevT)) || 0;
+    const p = this.fill.step(lt, dt, this.tracker?.activity ?? 0);
+    const total = this.fillCum[this.fillCum.length - 1] || 1;
+    const c = unitsToChar(this.fillSegs, p);
+    const i = Math.floor(c);
+    const x = (this.fillCum[i] ?? total) + ((this.fillCum[i + 1] ?? total) - (this.fillCum[i] ?? total)) * (c - i);
+    const f = this.fill.fraction() >= 1 ? 1 : Math.min(1, x / total);
+    cur.style.setProperty('--uw-fill-size', `calc(${(f * 100).toFixed(2)}% + ${(f * 0.75).toFixed(3)}em)`);
+  }
+
+  /** Cumulative pixel widths of the line's text per character (for word-by-word fill). */
+  measure(line: HTMLElement): number[] {
+    const node = line.firstChild;
+    const text = node?.textContent ?? '';
+    const cum = [0];
+    if (!node || node.nodeType !== Node.TEXT_NODE) return cum;
+    const r = document.createRange();
+    let acc = 0;
+    for (let i = 0; i < text.length; i++) {
+      r.setStart(node, i);
+      r.setEnd(node, i + 1);
+      let w = 0;
+      for (const rect of Array.from(r.getClientRects())) w += rect.width;
+      acc += w;
+      cum.push(acc);
+    }
+    return cum;
   }
 
   setCurrent(i: number) {
@@ -239,6 +381,7 @@ class Panel {
     });
     const cur = this.lineEls[i];
     this.position(cur ?? this.lineEls[0]);
+    this.fill = null;
     if (!cur) return;
     cur.classList.add('uw-current');
     this.applyFill(false);
@@ -250,8 +393,31 @@ class Panel {
     const cur = this.lineEls[this.current];
     const res = this.state.result;
     if (!cur || !res || this.state.status !== 'synced' || !this.video) return;
-    const f = fillTiming(res.lines, this.current, this.video.currentTime - this.chapterStart, this.video.playbackRate);
+    const lt = this.lyricTime();
+    const f = fillTiming(res.lines, this.current, lt, this.video.playbackRate);
     if (!f) return;
+    const voice = !!this.tracker?.ready && !reducedMotion();
+    cur.classList.toggle('uw-voice', voice);
+    if (voice) {
+      const line = res.lines[this.current];
+      const segs = segments(line.text);
+      const total = segs.reduce((a, g) => a + g.units, 0);
+      const fresh = !this.fill || this.fill.start !== line.time;
+      if (fresh) {
+        this.fill = new FillTracker(total, line.time, line.time + f.duration * (this.video.playbackRate || 1));
+        this.fillSegs = segs;
+        this.fillCum = this.measure(cur);
+      }
+      // seek / offset change mid-line: start from the linear position (tracker never goes backwards)
+      if (restart && this.fill) {
+        const lin = Math.min(1, Math.max(0, (lt - this.fill.start) / Math.max(0.05, this.fill.end - this.fill.start)));
+        this.fill = new FillTracker(total, this.fill.start, this.fill.end);
+        this.fill.p = total * lin;
+      }
+      this.lastLyricT = lt;
+      this.stepVoiceFill(lt);
+      return;
+    }
     cur.style.setProperty('--uw-dur', `${f.duration}s`);
     cur.style.setProperty('--uw-fill-delay', `${f.delay}s`);
     if (restart) {
@@ -370,7 +536,15 @@ class Panel {
     try {
       const res = await send({ type: 'lyrics:get', query });
       if (seq !== this.reqSeq || !this.alive) return;
-      if (res.ok) { this.failures = 0; this.dispatch({ type: 'loaded', result: res.result }); return; }
+      if (res.ok) {
+        this.failures = 0;
+        if (!this.manualSync) {
+          const dur = this.video && isFinite(this.video.duration) && !this.chapters.length ? this.video.duration : undefined;
+          this.syncOffset = res.result ? priorOffset(dur, res.result.lines) : 0;
+        }
+        this.dispatch({ type: 'loaded', result: res.result });
+        return;
+      }
       error = res.error;
     } catch (e) {
       if (seq !== this.reqSeq || !this.alive) return;

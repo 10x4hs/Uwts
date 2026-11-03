@@ -147,3 +147,30 @@
   .uw-burst { display: none; }
   .uw-skel-line { animation: none; }
 }
+
+/* ---------- sync: voice fill, intro, manual offset ---------- */
+.uw-current.uw-voice { animation: none; background-size: var(--uw-fill-size, 0%) 100%; transition: background-size .09s linear; }
+.uw-intro {
+  position: absolute; left: 0; right: 0; top: 35%; transform: translateY(-50%);
+  text-align: center; font-size: 28px; color: rgba(255,255,255,.85);
+  opacity: 0; pointer-events: none; transition: opacity .4s ease;
+}
+.uw-intro-on .uw-intro { opacity: 1; animation: uw-intro-bob 1.6s ease-in-out infinite; }
+.uw-intro-on .uw-lyrics { opacity: .55; }
+@keyframes uw-intro-bob { 50% { transform: translateY(calc(-50% - 6px)) scale(1.08); } }
+.uw-sync { display: flex; gap: 6px; justify-content: flex-end; padding: 0 16px 6px; position: relative; }
+.uw-sync-btn { width: auto; height: 26px; padding: 0 10px; font-size: 12px; border-radius: 13px; }
+.uw-collapsed .uw-sync, .uw-panel:not([data-status='synced']) .uw-sync { display: none; }
+.uw-toast {
+  position: absolute; left: 50%; bottom: 16px; transform: translate(-50%, 8px);
+  padding: 6px 12px; border-radius: 999px; font-size: 13px; color: #fff;
+  background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.22);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s;
+}
+.uw-toast-on { opacity: 1; transform: translate(-50%, 0); }
+@media (prefers-reduced-motion: reduce) {
+  .uw-intro-on .uw-intro { animation: none; }
+  .uw-current.uw-voice { transition: none; }
+  .uw-toast { transition: none; }
+}
