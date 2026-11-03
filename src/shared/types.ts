@@ -7,3 +7,13 @@ export interface LyricsResult {
   lines: LyricLine[]; // plain: time = -1
 }
 export interface Palette { from: string; to: string; glow: string } // CSS colors
+
+/** Everything known about the playing video, for fuzzy song resolution in the background. */
+export interface ResolveContext {
+  videoId: string;
+  videoTitle: string;      // raw YouTube title
+  channel: string;         // raw channel name
+  videoDuration?: number;  // seconds
+  chapterTitle?: string;   // current chapter title for multi-song videos
+  chapterDuration?: number;
+}
