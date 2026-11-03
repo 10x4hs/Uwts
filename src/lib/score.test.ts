@@ -121,9 +121,30 @@ describe('searchMatch / groupSearch', () => {
   });
   it('orders exact first and tags results', () => {
     const out = groupSearch('aespa whiplash', [R('aespa', 'Whiplash (Remix) extra words'), R('x', 'Other'), R('aespa', 'Whiplash')]);
-    expect(out.map((x) => [x.title, x.match])).toEqual([['Whiplash', 'exact'], ['Whiplash (Remix) extra words', 'exact']]);
+    expect(out.map((x) => [x.title, x.match])).toEqual([['Whiplash', 'exact'], ['Whiplash (Remix) extra words', 'partial']]); // remixes are demoted unless asked for
     const g = groupSearch('aespa whiplash live tour', [R('aespa', 'Whiplash'), R('aespa', 'Whiplash live tour')]);
     expect(g[0]).toMatchObject({ title: 'Whiplash live tour', match: 'exact' });
     expect(g[1]).toMatchObject({ title: 'Whiplash', match: 'partial' });
+  });
+});
+
+import { isVariant } from './score';
+describe('groupSearch cleanup', () => {
+  const R = (artist: string, title: string, kind = 'synced', duration?: number) => ({ artist, title, kind, duration });
+  it('dedupes repeated uploads of the same track', () => {
+    const out = groupSearch('RESCENE Love Attack', [
+      R('RESCENE', 'LOVE ATTACK', 'synced', 182), R('RESCENE', 'LOVE ATTACK', 'synced', 182.4),
+      R('RESCENE', 'LOVE ATTACK (LOVE ATTACK)', 'synced', 182), R('RESCENE', 'LOVE ATTACK', 'plain', 197),
+    ]);
+    expect(out.length).toBe(2);
+  });
+  it('demotes covers unless asked for', () => {
+    const out = groupSearch('RESCENE Love Attack', [R('RESCENE', 'LOVE ATTACK（cover）'), R('RESCENE', 'LOVE ATTACK')]);
+    expect(out.map((x) => [x.title, x.match])).toEqual([['LOVE ATTACK', 'exact'], ['LOVE ATTACK（cover）', 'partial']]);
+    expect(groupSearch('Love Attack cover', [R('RESCENE', 'LOVE ATTACK (cover)')])[0].match).toBe('exact');
+  });
+  it('isVariant', () => {
+    expect(isVariant('Pinball (Japanese Ver.)')).toBe(true);
+    expect(isVariant('Super Shy')).toBe(false);
   });
 });

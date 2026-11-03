@@ -168,8 +168,16 @@ export function searchMatch(query: string, artist: string, title: string): Searc
 export function groupSearch<T extends { artist: string; title: string; kind: string }>(query: string, list: T[]): (T & { match: SearchMatch })[] {
   const out: { r: T & { match: SearchMatch }; s: number; t: number }[] = [];
   const q = normText(query);
+  const seen = new Set<string>();
   for (const r of list) {
-    const match = searchMatch(query, r.artist, r.title);
+    // LRCLIB holds many user uploads of the same track (often with slightly different lengths):
+    // keep only the first, i.e. best-sourced, per title/artist/kind
+    const key = `${normText(displayTitleKey(r.title))}|${normText(r.artist)}|${r.kind}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    let match = searchMatch(query, r.artist, r.title);
+    // covers/remixes/instrumentals only count as exact when the user asked for them
+    if (match === 'exact' && isVariant(r.title) && !isVariant(query)) match = 'partial';
     // t: share of the candidate's words that the query covers (fewer extra words = closer)
     if (match) out.push({ r: { ...r, match }, s: searchRelevance(query, r.artist, r.title), t: tokenOverlap(normText(`${r.artist} ${r.title}`), q) });
   }
@@ -177,4 +185,17 @@ export function groupSearch<T extends { artist: string; title: string; kind: str
     .sort((a, b) => Number(b.r.match === 'exact') - Number(a.r.match === 'exact') || b.s - a.s || b.t - a.t
       || Number(b.r.kind === 'synced') - Number(a.r.kind === 'synced'))
     .map((x) => x.r);
+}
+
+
+const VARIANT = /\b(cover|covered|remix|inst\.?|instrumental|karaoke|mr|acoustic|live|sped ?up|slowed|nightcore|ver\.?|version)\b|커버|리믹스|반주|라이브|伴奏|翻唱|抖音|dj版/i;
+/** Cover/remix/instrumental/live and similar non-original versions. */
+export function isVariant(s: string): boolean {
+  return VARIANT.test(s);
+}
+
+/** "LOVE ATTACK (LOVE ATTACK)" -> "LOVE ATTACK" for de-duplication. */
+function displayTitleKey(t: string): string {
+  const m = t.match(/^(.*?)\s*\(([^()]*)\)\s*$/);
+  return m && m[1] && m[1].trim().toLowerCase() === m[2].trim().toLowerCase() ? m[1] : t;
 }
