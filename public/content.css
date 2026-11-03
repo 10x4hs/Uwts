@@ -138,7 +138,18 @@
 }
 .uw-result:hover { background: rgba(255,255,255,.16); }
 .uw-result-title { font-size: 14px; font-weight: 700; }
-.uw-result-artist { font-size: 12px; color: rgba(255,255,255,.65); }
+.uw-result-artist { font-size: 12px; color: rgba(255,255,255,.65); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.uw-searchpanel { display: flex; flex-direction: column; gap: 10px; padding-bottom: 14px; }
+.uw-searchpanel[hidden], .uw-intro[hidden] { display: none; }
+.uw-searching .uw-lyrics { display: none; }
+.uw-search-status { margin: 0; font-size: 13px; color: rgba(255,255,255,.7); }
+.uw-search-status:empty { display: none; }
+.uw-search-status.uw-search-error { color: #ffb4b4; }
+.uw-result-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.uw-result-dur { font-size: 12px; color: rgba(255,255,255,.55); font-variant-numeric: tabular-nums; flex: none; }
+.uw-badge { flex: none; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 9px; background: rgba(255,255,255,.14); color: rgba(255,255,255,.8); }
+.uw-badge-synced { background: var(--uw-glow); color: #111; }
+.uw-result-current { background: rgba(255,255,255,.2); box-shadow: inset 0 0 0 2px var(--uw-glow); }
 
 @media (prefers-reduced-motion: reduce) {
   .uw-panel, .uw-line, .uw-chip, .uw-collapse-btn svg, .uw-bg { transition: none; }

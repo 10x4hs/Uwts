@@ -1,7 +1,8 @@
 import { send } from '../shared/messages';
-import type { Chapter, LyricsResult, Palette, SongQuery } from '../shared/types';
+import type { Chapter, LyricsResult, Palette, ResolveContext, SongQuery } from '../shared/types';
+import { overrideKey } from '../lib/keys';
+import { buildQueries } from '../lib/queries';
 import { parseChapters, chapterAt } from '../lib/chapters';
-import { parseVideoTitle } from '../lib/title';
 import { lineIndexAt } from '../lib/lrc';
 import { shiftHue } from '../lib/color';
 import { blurLevel, staggerDelay, scrollOffset, fillTiming, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
@@ -47,6 +48,9 @@ function readDescriptionScript(videoId: string): string {
 
 const domTitle = () => document.querySelector('ytd-watch-metadata h1')?.textContent?.trim() ?? '';
 const domChannel = () => document.querySelector('#owner #channel-name a')?.textContent?.trim() ?? '';
+type Cand = LyricsResult & { duration?: number };
+const SEARCH_DEBOUNCE_MS = 300;
+const formatDuration = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -82,6 +86,19 @@ class Panel {
   lineEls: HTMLElement[] = [];
   current = -1;
   state: PanelState = initialState;
+  // search overlay (kept outside lyricsEl so typing survives re-renders)
+  searchEl = el('div', 'uw-searchpanel');
+  searchInput = el('input', 'uw-search-input');
+  searchStatus = el('p', 'uw-search-status');
+  resultsEl = el('ul', 'uw-results');
+  searchTimer = 0;
+  searchSeq = 0;
+  candidates: Cand[] = [];
+  bestQuery: SongQuery | null = null;
+  ctxKey = '';
+  lastCtx: ResolveContext | null = null;
+  durationReady = false; // <video>.duration belongs to this navigation
+  autoConfident = false;
 
   // song context
   videoId: string;
@@ -155,8 +172,10 @@ class Panel {
       syncRow.append(b);
     }
     this.introEl.setAttribute('aria-hidden', 'true');
+    this.introEl.hidden = true;
     this.toastEl.setAttribute('role', 'status');
-    this.body.append(this.lyricsEl, this.introEl);
+    this.buildSearch();
+    this.body.append(this.searchEl, this.lyricsEl, this.introEl);
     this.root.append(this.bg, header, syncRow, this.body, this.toastEl);
     this.setCollapsed(collapsedPref, false);
     let pressTimer = 0;
@@ -211,6 +230,7 @@ class Panel {
   destroy() {
     cancelAnimationFrame(this.raf);
     clearTimeout(this.retryTimer);
+    clearTimeout(this.searchTimer);
     clearTimeout(this.manualTimer);
     clearTimeout(this.toastTimer);
     clearInterval(this.estTimer);
@@ -251,7 +271,15 @@ class Panel {
     const onPause = () => { sync(); cancelAnimationFrame(this.raf); this.tick(); };
     const onTime = () => { if (v.paused) this.tick(); };
     const refill = () => { this.tick(); this.applyFill(true); };
+    const flexy = document.querySelector('ytd-watch-flexy');
+    this.durationReady = v.readyState >= 1 && flexy?.getAttribute('video-id') === this.videoId;
+    const onDur = () => {
+      if (!isFinite(v.duration) || v.duration <= 0) return;
+      this.durationReady = true;
+      this.applyPrior();
+    };
     const evs: [string, () => void][] = [
+      ['loadedmetadata', onDur], ['durationchange', onDur],
       ['play', onPlay], ['pause', onPause], ['ended', onPause], ['timeupdate', onTime],
       ['seeked', refill], ['ratechange', refill],
     ];
@@ -272,7 +300,9 @@ class Panel {
     if (this.state.status !== 'synced' || !this.state.result) return;
     const lt = this.lyricTime();
     const lines = this.state.result.lines;
-    this.root.classList.toggle('uw-intro-on', isIntro(lines, lt));
+    const intro = isIntro(lines, lt);
+    this.root.classList.toggle('uw-intro-on', intro);
+    this.introEl.hidden = !intro;
     this.setCurrent(lineIndexAt(lines, lt));
     this.stepVoiceFill(lt);
   }
@@ -322,6 +352,7 @@ class Panel {
     this.root.dataset.syncEstimate = `${e.offset.toFixed(1)}${e.confident ? '' : '?'}`;
     this.root.dataset.syncOnsets = String(onsets.length);
     if (!e.confident) return;
+    this.autoConfident = true;
     const next = smoothOffset(this.syncOffset, e.offset);
     if (next === this.syncOffset) return;
     this.syncOffset = next;
@@ -505,11 +536,11 @@ class Panel {
     this.resolveSong();
   }
 
-  resolveSong() {
+  resolveSong(force = false) {
     if (!this.alive || !this.ready) return;
     const t = this.video?.currentTime ?? 0;
-    const dur = this.video && isFinite(this.video.duration) ? this.video.duration : undefined;
-    let query: SongQuery;
+    const dur = this.currentDuration();
+    const ctx: ResolveContext = { videoId: this.videoId, videoTitle: this.videoTitle, channel: this.channel, videoDuration: dur ? Math.round(dur) : undefined };
     let hueIndex = 0;
     const hit = this.chapters.length ? chapterAt(this.chapters, t) : null;
     if (hit) {
@@ -517,36 +548,47 @@ class Panel {
       this.chapterStart = hit.chapter.start;
       hueIndex = hit.index;
       const end = hit.end ?? dur;
-      query = { ...parseVideoTitle(hit.chapter.title, this.channel), duration: end != null ? Math.round(end - hit.chapter.start) : undefined };
-      this.subEl.textContent = `${query.artist} · ${hit.index + 1} / ${this.chapters.length}곡`;
+      ctx.chapterTitle = hit.chapter.title;
+      ctx.chapterDuration = end != null ? Math.round(end - hit.chapter.start) : undefined;
     } else {
       this.chapterIndex = -1;
       this.chapterStart = 0;
-      query = { ...parseVideoTitle(this.videoTitle, this.channel), duration: dur ? Math.round(dur) : undefined };
-      this.subEl.textContent = query.artist;
     }
-    this.titleEl.textContent = query.title;
+    // provisional header from the local parse; replaced by the resolved song
+    const guess = buildQueries(ctx);
+    this.titleEl.textContent = guess.title;
+    this.subEl.textContent = hit ? `${guess.artist} · ${hit.index + 1} / ${this.chapters.length}곡` : guess.artist;
     void this.applyPalette(hueIndex);
-    if (sameQuery(query, this.state.query) && this.state.status !== 'error') return;
+    const key = `${ctx.videoId}#${ctx.chapterTitle ?? ''}`;
+    if (!force && key === this.ctxKey && this.state.status !== 'error') return;
+    this.ctxKey = key;
     this.failures = 0;
-    void this.load(query);
+    void this.load(ctx, { artist: guess.artist, title: guess.title, duration: ctx.chapterDuration ?? ctx.videoDuration });
   }
 
-  async load(query: SongQuery) {
+  async load(ctx: ResolveContext, guess: SongQuery) {
     const seq = ++this.reqSeq;
     clearTimeout(this.retryTimer);
-    this.dispatch({ type: 'load', query });
+    this.lastCtx = ctx;
+    this.candidates = [];
+    this.bestQuery = guess;
+    this.dispatch({ type: 'load', query: guess });
     let error: string | null = null;
     try {
-      const res = await send({ type: 'lyrics:get', query });
+      const res = await send({ type: 'lyrics:resolve', ctx });
       if (seq !== this.reqSeq || !this.alive) return;
       if (res.ok) {
         this.failures = 0;
-        if (!this.manualSync) {
-          const dur = this.video && isFinite(this.video.duration) && !this.chapters.length ? this.video.duration : undefined;
-          this.syncOffset = res.result ? priorOffset(dur, res.result.lines) : 0;
+        this.candidates = res.candidates as Cand[];
+        this.bestQuery = res.query;
+        this.autoConfident = false;
+        this.applyPrior(res.result);
+        if (res.result) {
+          this.titleEl.textContent = res.result.title;
+          if (this.chapterIndex < 0) this.subEl.textContent = res.result.artist;
         }
         this.dispatch({ type: 'loaded', result: res.result });
+        if (!this.searchEl.hidden) this.showCandidates();
         return;
       }
       error = res.error;
@@ -557,7 +599,7 @@ class Panel {
     this.failures++;
     if (shouldAutoRetry(this.failures)) {
       // keep the loading skeleton up; try once more quietly
-      this.retryTimer = window.setTimeout(() => { if (this.alive && seq === this.reqSeq) void this.load(query); }, 3000);
+      this.retryTimer = window.setTimeout(() => { if (this.alive && seq === this.reqSeq) void this.load(ctx, guess); }, 3000);
       return;
     }
     this.dispatch({ type: 'failed', error });
@@ -578,22 +620,124 @@ class Panel {
     s.setProperty('--uw-glow', p.glow);
   }
 
-  async search(q: string) {
-    if (!q.trim()) return;
-    this.dispatch({ type: 'search' });
-    try {
-      const res = await send({ type: 'lyrics:search', q });
-      if (!this.alive) return;
-      if (res.ok) this.dispatch({ type: 'searchDone', results: res.results });
-      else this.dispatch({ type: 'searchFailed', error: res.error });
-    } catch (e) {
-      if (this.alive) this.dispatch({ type: 'searchFailed', error: String(e) });
+  /** Video duration only once it is known to belong to this video (SPA reuses the <video>). */
+  currentDuration(): number | undefined {
+    const d = this.video?.duration;
+    return this.durationReady && d != null && isFinite(d) && d > 0 ? d : undefined;
+  }
+
+  /** Duration-based intro offset; re-applied when the duration arrives, unless user/auto sync took over. */
+  applyPrior(result: LyricsResult | null = this.state.result) {
+    if (this.manualSync || this.autoConfident) return;
+    const dur = this.chapters.length ? undefined : this.currentDuration();
+    const next = result ? priorOffset(dur, result.lines) : 0;
+    if (next === this.syncOffset) return;
+    this.syncOffset = next;
+    if (this.state.status === 'synced') this.refresh();
+  }
+
+  // ----- search -----
+  buildSearch() {
+    this.searchEl.hidden = true;
+    const form = el('form', 'uw-search');
+    const input = this.searchInput;
+    input.type = 'search';
+    input.placeholder = '가수, 노래 제목';
+    input.setAttribute('aria-label', '가사 검색어');
+    input.autocomplete = 'off';
+    const close = el('button', 'uw-btn uw-search-go', '닫기');
+    close.type = 'button';
+    close.addEventListener('click', () => this.closeSearch());
+    form.append(input, close);
+    form.addEventListener('submit', (e) => { e.preventDefault(); clearTimeout(this.searchTimer); void this.search(input.value); });
+    input.addEventListener('input', () => {
+      clearTimeout(this.searchTimer);
+      this.searchTimer = window.setTimeout(() => void this.search(input.value), SEARCH_DEBOUNCE_MS);
+    });
+    // keep keystrokes away from YouTube shortcuts
+    input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') this.closeSearch(); });
+    this.searchStatus.setAttribute('role', 'status');
+    this.searchEl.append(form, this.searchStatus, this.resultsEl);
+  }
+
+  openSearch(focus: boolean) {
+    const q = this.bestQuery ?? this.state.query;
+    const wasHidden = this.searchEl.hidden;
+    this.searchEl.hidden = false;
+    this.root.classList.add('uw-searching');
+    if (wasHidden) {
+      this.searchInput.value = q ? `${q.artist} ${q.title}`.trim() : '';
+      this.showCandidates();
     }
+    this.body.scrollTop = 0;
+    if (focus) this.searchInput.focus({ preventScroll: true });
+  }
+
+  closeSearch() {
+    clearTimeout(this.searchTimer);
+    this.searchSeq++;
+    this.searchEl.hidden = true;
+    this.root.classList.remove('uw-searching');
+    if (this.state.status === 'synced') this.tick();
   }
 
   showSearch() {
     this.setCollapsed(false, true);
-    this.dispatch({ type: 'loaded', result: null });
+    if (this.searchEl.hidden) this.openSearch(true); else this.closeSearch();
+  }
+
+  /** Background-resolved candidates (lets the user fix a wrong match without typing). */
+  showCandidates() {
+    this.renderResults(this.candidates, this.candidates.length ? '' : (this.state.status === 'loading' ? '찾는 중…' : ''));
+  }
+
+  async search(q: string) {
+    const seq = ++this.searchSeq;
+    if (!q.trim()) { this.showCandidates(); return; }
+    this.searchStatus.textContent = '검색 중…';
+    try {
+      const res = await send({ type: 'lyrics:search', q: q.trim() });
+      if (!this.alive || seq !== this.searchSeq) return;
+      if (res.ok) this.renderResults(res.results as Cand[], res.results.length ? '' : '검색 결과가 없어요');
+      else this.renderResults([], '검색에 실패했어요. 다시 시도해 주세요.', true);
+    } catch {
+      if (this.alive && seq === this.searchSeq) this.renderResults([], '검색에 실패했어요. 다시 시도해 주세요.', true);
+    }
+  }
+
+  renderResults(list: Cand[], status: string, error = false) {
+    this.searchStatus.textContent = status;
+    this.searchStatus.classList.toggle('uw-search-error', error);
+    this.resultsEl.replaceChildren();
+    const cur = this.state.result;
+    for (const r of list) {
+      const li = el('li');
+      const b = el('button', 'uw-result');
+      b.type = 'button';
+      const chosen = !!cur && cur.title === r.title && cur.artist === r.artist && cur.kind === r.kind;
+      if (chosen) { b.classList.add('uw-result-current'); b.setAttribute('aria-current', 'true'); }
+      const meta = el('span', 'uw-result-meta');
+      meta.append(el('span', 'uw-result-artist', r.artist));
+      if (r.duration) meta.append(el('span', 'uw-result-dur', formatDuration(r.duration)));
+      meta.append(el('span', `uw-badge${r.kind === 'synced' ? ' uw-badge-synced' : ''}`, r.kind === 'synced' ? '싱크' : '일반'));
+      b.append(el('span', 'uw-result-title', r.title), meta);
+      b.addEventListener('click', () => this.choose(r));
+      li.append(b);
+      this.resultsEl.append(li);
+    }
+  }
+
+  choose(r: Cand) {
+    this.reqSeq++; // drop any in-flight resolve
+    clearTimeout(this.retryTimer);
+    this.closeSearch();
+    this.autoConfident = false;
+    this.applyPrior(r);
+    this.titleEl.textContent = r.title;
+    if (this.chapterIndex < 0) this.subEl.textContent = r.artist;
+    this.dispatch({ type: 'choose', result: r });
+    const key = overrideKey(this.videoId, this.lastCtx?.chapterTitle);
+    chrome.storage?.local.set({ [key]: r }).catch(() => { /* quota */ });
   }
 
   // ----- render -----
@@ -603,6 +747,8 @@ class Panel {
     this.lineEls = [];
     this.current = -1;
     this.root.dataset.status = s.status;
+    this.introEl.hidden = true;
+    this.root.classList.remove('uw-intro-on');
     this.lyricsEl.style.setProperty('--uw-y', '0px');
     if (s.status === 'loading' || s.status === 'idle') {
       const sk = el('div', 'uw-skeleton');
@@ -628,49 +774,29 @@ class Panel {
       this.body.scrollTop = 0;
       if (s.status === 'synced') { this.position(this.lineEls[0]); this.tick(); }
     } else if (s.status === 'notfound') {
-      this.renderNotFound(s);
+      this.renderNotFound();
     } else if (s.status === 'error') {
       const box = el('div', 'uw-message');
       box.append(el('p', 'uw-message-text', '가사를 불러오지 못했어요'));
       const retry = el('button', 'uw-btn uw-retry', '다시 시도');
       retry.type = 'button';
-      retry.addEventListener('click', () => s.query && this.load(s.query));
+      retry.addEventListener('click', () => this.resolveSong(true));
       box.append(retry);
       this.lyricsEl.append(box);
     }
   }
 
-  renderNotFound(s: PanelState) {
+  renderNotFound() {
     const box = el('div', 'uw-message');
     box.append(el('p', 'uw-message-text', '가사를 찾지 못했어요'));
-    const form = el('form', 'uw-search');
-    const input = el('input', 'uw-search-input');
-    input.type = 'search';
-    input.placeholder = '가수, 노래 제목';
-    input.setAttribute('aria-label', '가사 검색어');
-    input.value = s.query ? `${s.query.artist} ${s.query.title}`.trim() : '';
-    const go = el('button', 'uw-btn uw-search-go', s.searching ? '검색 중…' : '검색');
-    go.type = 'submit';
-    form.append(input, go);
-    form.addEventListener('submit', (e) => { e.preventDefault(); this.search(input.value); });
-    // keep keystrokes away from YouTube shortcuts
-    input.addEventListener('keydown', (e) => e.stopPropagation());
-    box.append(form);
-    if (s.error) box.append(el('p', 'uw-search-error', '검색에 실패했어요. 다시 시도해 주세요.'));
-    if (s.searchResults.length) {
-      const ul = el('ul', 'uw-results');
-      for (const r of s.searchResults) {
-        const li = el('li');
-        const b = el('button', 'uw-result');
-        b.type = 'button';
-        b.append(el('span', 'uw-result-title', r.title), el('span', 'uw-result-artist', `${r.artist} · ${r.kind === 'synced' ? '싱크' : '일반'}`));
-        b.addEventListener('click', () => this.dispatch({ type: 'choose', result: r }));
-        li.append(b);
-        ul.append(li);
-      }
-      box.append(ul);
+    if (this.searchEl.hidden) {
+      const b = el('button', 'uw-btn uw-retry', '직접 검색');
+      b.type = 'button';
+      b.addEventListener('click', () => this.openSearch(true));
+      box.append(b);
     }
     this.lyricsEl.append(box);
+    this.openSearch(false);
   }
 }
 

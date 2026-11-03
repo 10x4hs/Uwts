@@ -44,13 +44,13 @@ export function parseNeteaseLrc(lrc: string): LyricsResult['lines'] {
   return parseLrc(lrc).filter((l) => !META_RE.test(l.text));
 }
 
-async function searchSongs(s: string): Promise<NeteaseSong[]> {
+export async function searchSongs(s: string): Promise<NeteaseSong[]> {
   const p = new URLSearchParams({ s, type: '1', limit: '10' });
   const r = await getJson<{ result?: { songs?: NeteaseSong[] } }>(`${API}/search/get?${p}`, 'NetEase');
   return r.body?.result?.songs ?? [];
 }
 
-async function lyricFor(song: NeteaseSong): Promise<LyricsResult | null> {
+export async function lyricFor(song: NeteaseSong): Promise<LyricsResult | null> {
   const r = await getJson<{ lrc?: { lyric?: string } }>(`${API}/song/lyric?id=${song.id}&lv=1`, 'NetEase');
   const text = r.body?.lrc?.lyric;
   if (!text) return null;

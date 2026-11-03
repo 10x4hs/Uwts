@@ -1,0 +1,109 @@
+const HANGUL = /[ㄱ-ㆎ가-힣]/;
+
+/** Lowercase, NFKC, unify quotes, punctuation -> space. */
+export function normText(s: string): string {
+  return s.replace(/[\u3163\u1175]/g, ' ').normalize('NFKC').toLowerCase()
+    .replace(/[’‘`´]/g, "'")
+    .replace(/'/g, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+export const compact = (s: string) => normText(s).replace(/ /g, '');
+const stripParens = (s: string) => s.replace(/\s*[(（[【][^)）\]】]*[)）\]】]/g, ' ').replace(/\s+/g, ' ').trim();
+
+export interface ScoreInput { artist: string; title: string; duration?: number; synced?: boolean; kind?: string }
+export interface ScoreContext { videoTitle: string; channel: string; chapterTitle?: string; duration?: number }
+
+/** Track name variants: full, parens stripped, each parenthetical alternate. */
+function titleVariants(t: string): string[] {
+  const out = new Set<string>();
+  const bare = stripParens(t).replace(/\s*\b(feat|ft)\.?\s.*$/i, '');
+  out.add(normText(bare));
+  for (const m of t.matchAll(/[(（[]([^)）\]]+)[)）\]]/g)) {
+    if (!/\b(feat|ft|prod|remix|ver|version|inst|mr|live)\b/i.test(m[1])) out.add(normText(m[1]));
+  }
+  return [...out].filter((v) => v.length > 0);
+}
+
+/** Does phrase occur in hay? Latin: on token boundaries; Hangul: spacing-insensitive substring. */
+export function phraseIn(phrase: string, hay: string): boolean {
+  if (!phrase) return false;
+  if (HANGUL.test(phrase)) {
+    const p = phrase.replace(/ /g, '');
+    return p.length >= 2 && hay.replace(/ /g, '').includes(p);
+  }
+  if (phrase.replace(/ /g, '').length < 2) return false;
+  return ` ${hay} `.includes(` ${phrase} `);
+}
+
+function tokenOverlap(cand: string, hay: string): number {
+  const ct = cand.split(' ').filter(Boolean);
+  if (!ct.length) return 0;
+  const ht = new Set(hay.split(' '));
+  const hc = hay.replace(/ /g, '');
+  let hit = 0;
+  for (const t of ct) if (ht.has(t) || (HANGUL.test(t) && t.length >= 2 && hc.includes(t))) hit++;
+  return hit / ct.length;
+}
+
+export function splitArtists(a: string): string[] {
+  const out: string[] = [];
+  for (const part of a.normalize('NFKC').split(/\s*(?:,|&|、|\/|;|\bfeat\.?|\bft\.?|\bx\b|×|\band\b)\s*/i)) {
+    const main = stripParens(part);
+    if (main) out.push(normText(main));
+    for (const m of part.matchAll(/\(([^)]+)\)/g)) out.push(normText(m[1]));
+  }
+  // "Seungri 승리" -> also each script separately
+  for (const p of [...out]) {
+    const h = p.split(' ').filter((w) => HANGUL.test(w)).join(' ');
+    const l = p.split(' ').filter((w) => !HANGUL.test(w)).join(' ');
+    if (h && l) out.push(h, l);
+  }
+  return [...new Set(out.filter((x) => x.length > 0))];
+}
+
+/** Duration score in [0,1]: MVs can run ~90s longer than the track. */
+export function durationScore(cand?: number, video?: number): number {
+  if (cand == null || video == null || !cand || !video) return 0.5;
+  if (cand > video + 3) return Math.max(0, 1 - (cand - video - 3) / 15);
+  const shorter = video - cand;
+  if (shorter > 120) return Math.max(0, 1 - (shorter - 120) / 120);
+  return 1;
+}
+
+export const MIN_SCORE = 0.55;
+export const HIGH_SCORE = 0.85;
+
+/** Score a candidate against the raw video info. Returns 0 for clear rejects. */
+export function scoreCandidate(c: ScoreInput, ctx: ScoreContext): number {
+  const titleHay = normText(`${ctx.chapterTitle ?? ''} ${ctx.chapterTitle ? '' : ctx.videoTitle}`);
+  const hay = normText(`${ctx.videoTitle} ${ctx.chapterTitle ?? ''} ${ctx.channel}`);
+  const tv = titleVariants(c.title);
+  let title = 0;
+  for (const v of tv) {
+    // digits-only alternates like "(1, 2, 3!)" are weak evidence
+    if (phraseIn(v, titleHay)) { title = Math.max(title, /\p{L}/u.test(v) ? 1 : 0.7); if (title === 1) break; continue; }
+    title = Math.max(title, tokenOverlap(v, titleHay) * 0.8);
+  }
+  if (title < 0.5) return 0;
+  const arts = splitArtists(c.artist);
+  let artist = 0;
+  for (const a of arts) {
+    if (phraseIn(a, hay)) { artist = 1; break; }
+    artist = Math.max(artist, tokenOverlap(a, hay) * 0.6);
+  }
+  const dur = durationScore(c.duration, ctx.duration);
+  if (dur === 0 && artist < 1) return 0;
+  // version markers on the candidate (remix, inst, sped up...) that the video doesn't mention
+  const VERSION = /\b(remix|inst|instrumental|mr|sped\s*up|slowed|acoustic|live|ver|version|cover|karaoke|english|japanese|jp)\b|버전/gi;
+  const videoAll = normText(`${ctx.videoTitle} ${ctx.chapterTitle ?? ''}`);
+  const extra = (normText(c.title).match(VERSION) ?? []).filter((w) => !` ${videoAll} `.includes(` ${w} `)).length;
+  const s = 0.5 * title - (extra ? 0.2 : 0) + 0.3 * artist + 0.15 * dur + ((c.synced ?? c.kind === 'synced') ? 0.05 : 0);
+  return Math.round(s * 1000) / 1000;
+}
+
+export function rank<T extends ScoreInput>(cands: T[], ctx: ScoreContext): { item: T; score: number }[] {
+  return cands.map((item) => ({ item, score: scoreCandidate(item, ctx) }))
+    .filter((x) => x.score >= MIN_SCORE)
+    .sort((a, b) => b.score - a.score);
+}

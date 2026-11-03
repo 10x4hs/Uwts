@@ -61,3 +61,15 @@ export async function searchLyrics(q: string): Promise<LyricsResult[]> {
   const found = await getJson<LrclibTrack[]>(`${API}/search?${new URLSearchParams({ q })}`);
   return (found.body ?? []).slice(0, 8).map(toResult).filter((r): r is LyricsResult => r !== null);
 }
+
+/** Raw free-text search (all candidates incl. duration). */
+export async function searchTracks(q: string): Promise<LrclibTrack[]> {
+  return (await getJson<LrclibTrack[]>(`${API}/search?${new URLSearchParams({ q })}`)).body ?? [];
+}
+
+/** Exact /api/get lookup; null if missing. */
+export async function getTrack(artist: string, title: string, duration?: number): Promise<LrclibTrack | null> {
+  const p = new URLSearchParams({ artist_name: artist, track_name: title });
+  if (duration) p.set('duration', String(Math.round(duration)));
+  return (await getJson<LrclibTrack>(`${API}/get?${p}`)).body;
+}

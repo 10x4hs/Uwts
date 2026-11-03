@@ -1,8 +1,11 @@
 import type { Request } from '../shared/messages';
 import type { LyricsResult, Palette, SongQuery } from '../shared/types';
-import { fetchLyrics, searchLyrics } from './lrclib';
+import { fetchLyrics } from './lrclib';
 import { fetchNetease, searchNetease } from './netease';
 import { getJson } from './http';
+import { resolveCached } from './resolve';
+import { searchTracks } from './lrclib';
+import { fromLrclibTrack } from './resolve';
 import { paletteFromPixels } from '../lib/color';
 
 const NULL_TTL_MS = 10 * 60 * 1000;
@@ -75,11 +78,21 @@ async function handle(req: Request): Promise<unknown> {
       const key = `lyrics:${norm(q.artist)}|${norm(q.title)}|${q.duration ? Math.round(q.duration) : ''}`;
       return { ok: true, result: await cached(key, () => lyricsFor(q)) };
     }
+    case 'lyrics:resolve':
+      return { ok: true, ...(await resolveCached(req.ctx)) };
     case 'lyrics:search':
       return { ok: true, results: await cached(`search:${norm(req.q)}`, async () => {
-        const [a, b] = await Promise.allSettled([searchLyrics(req.q), searchNetease(req.q)]);
+        const t0 = performance.now();
+        const [a, b] = await Promise.allSettled([
+          searchTracks(req.q).then((ts) => ts.map(fromLrclibTrack).filter((r) => r !== null).slice(0, 10)),
+          searchNetease(req.q, 4),
+        ]);
         if (a.status === 'rejected' && b.status === 'rejected') throw a.reason;
-        return [...(a.status === 'fulfilled' ? a.value : []), ...(b.status === 'fulfilled' ? b.value : [])];
+        console.debug(`[uwts] search "${req.q}" in ${Math.round(performance.now() - t0)}ms`);
+        const la = a.status === 'fulfilled' ? a.value : [];
+        const lb = b.status === 'fulfilled' ? b.value : [];
+        // synced first, keep source order otherwise
+        return [...la, ...lb].sort((x, y) => Number(y.kind === 'synced') - Number(x.kind === 'synced'));
       }) };
     case 'palette:get':
       return { ok: true, palette: await cached(`palette:${req.videoId}`, () => paletteFor(req.videoId)) };
