@@ -38,5 +38,14 @@
         "path": "rules.json"
       }
     ]
+  },
+  "optional_host_permissions": [
+    "https://*.bugs.co.kr/*",
+    "https://*.genie.co.kr/*",
+    "https://*.melon.com/*"
+  ],
+  "options_ui": {
+    "page": "grant.html",
+    "open_in_tab": true
   }
 }

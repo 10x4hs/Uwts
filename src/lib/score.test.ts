@@ -104,3 +104,26 @@ describe('rankSearch', () => {
     expect(rankSearch('비와이 찾으니', [R('BewhY', '찾으니'), R('BewhY', '가라사대')]).map((x) => x.title)).toEqual(['찾으니']);
   });
 });
+
+import { groupSearch, searchMatch } from './score';
+describe('searchMatch / groupSearch', () => {
+  const R = (artist: string, title: string, kind = 'synced') => ({ artist, title, kind, lines: [] });
+  it('exact when title equals or all tokens found', () => {
+    expect(searchMatch('whiplash', 'aespa', 'Whiplash')).toBe('exact');
+    expect(searchMatch('aespa whiplash', 'aespa', 'Whiplash')).toBe('exact');
+    expect(searchMatch('백화요란', 'RESCENE (리센느)', '백화요란 (Inside Out)')).toBe('exact');
+    expect(searchMatch('inside out', 'RESCENE (리센느)', '백화요란 (Inside Out)')).toBe('exact');
+    expect(searchMatch('리센느 백화요란', 'RESCENE (리센느)', '백화요란 (Inside Out)')).toBe('exact');
+  });
+  it('partial for related, null for unrelated', () => {
+    expect(searchMatch('aespa whiplash remix', 'aespa', 'Whiplash')).toBe('partial');
+    expect(searchMatch('whiplash', '华晨宇', '烟火里的尘埃')).toBeNull();
+  });
+  it('orders exact first and tags results', () => {
+    const out = groupSearch('aespa whiplash', [R('aespa', 'Whiplash (Remix) extra words'), R('x', 'Other'), R('aespa', 'Whiplash')]);
+    expect(out.map((x) => [x.title, x.match])).toEqual([['Whiplash', 'exact'], ['Whiplash (Remix) extra words', 'exact']]);
+    const g = groupSearch('aespa whiplash live tour', [R('aespa', 'Whiplash'), R('aespa', 'Whiplash live tour')]);
+    expect(g[0]).toMatchObject({ title: 'Whiplash live tour', match: 'exact' });
+    expect(g[1]).toMatchObject({ title: 'Whiplash', match: 'partial' });
+  });
+});
