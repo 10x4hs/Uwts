@@ -1,6 +1,8 @@
 import type { Request } from '../shared/messages';
-import type { Palette } from '../shared/types';
+import type { LyricsResult, Palette, SongQuery } from '../shared/types';
 import { fetchLyrics, searchLyrics } from './lrclib';
+import { fetchNetease, searchNetease } from './netease';
+import { getJson } from './http';
 import { paletteFromPixels } from '../lib/color';
 
 const NULL_TTL_MS = 10 * 60 * 1000;
@@ -31,17 +33,46 @@ async function paletteFor(videoId: string): Promise<Palette> {
   return paletteFromPixels(ctx.getImageData(0, 0, 64, 36).data);
 }
 
+/** LRCLIB first, NetEase fallback. Errors propagate (never cached as null). */
+async function lyricsFor(q: SongQuery): Promise<LyricsResult | null> {
+  let lrcErr: unknown = null;
+  try {
+    const r = await fetchLyrics(q);
+    if (r) return r;
+  } catch (e) { lrcErr = e; }
+  const n = await fetchNetease(q).catch((e: unknown) => { throw lrcErr ?? e; });
+  if (n) return n;
+  if (lrcErr) throw lrcErr;
+  return null;
+}
+
+async function videoMeta(videoId: string): Promise<{ title: string; channel: string }> {
+  const watch = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+  const r = await getJson<{ title?: string; author_name?: string }>(
+    `https://www.youtube.com/oembed?${new URLSearchParams({ url: watch, format: 'json' })}`, 'oEmbed');
+  if (!r.body?.title) throw new Error('oEmbed: no metadata');
+  return { title: r.body.title, channel: r.body.author_name ?? '' };
+}
+
 async function handle(req: Request): Promise<unknown> {
   switch (req.type) {
     case 'lyrics:get': {
       const q = req.query;
       const key = `lyrics:${norm(q.artist)}|${norm(q.title)}|${q.duration ? Math.round(q.duration) : ''}`;
-      return { ok: true, result: await cached(key, () => fetchLyrics(q)) };
+      return { ok: true, result: await cached(key, () => lyricsFor(q)) };
     }
     case 'lyrics:search':
-      return { ok: true, results: await cached(`search:${norm(req.q)}`, () => searchLyrics(req.q)) };
+      return { ok: true, results: await cached(`search:${norm(req.q)}`, async () => {
+        const [a, b] = await Promise.allSettled([searchLyrics(req.q), searchNetease(req.q)]);
+        if (a.status === 'rejected' && b.status === 'rejected') throw a.reason;
+        return [...(a.status === 'fulfilled' ? a.value : []), ...(b.status === 'fulfilled' ? b.value : [])];
+      }) };
     case 'palette:get':
       return { ok: true, palette: await cached(`palette:${req.videoId}`, () => paletteFor(req.videoId)) };
+    case 'video:meta': {
+      const meta = await cached(`meta:${req.videoId}`, () => videoMeta(req.videoId));
+      return { ok: true, ...meta };
+    }
     default:
       return { ok: false, error: 'unknown request' };
   }

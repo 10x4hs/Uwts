@@ -1,5 +1,8 @@
 import type { LyricsResult, SongQuery } from '../shared/types';
 import { parseLrc } from '../lib/lrc';
+import { getJson as getJsonRaw } from './http';
+
+const getJson = <T>(url: string) => getJsonRaw<T>(url, 'LRCLIB');
 
 export interface LrclibTrack {
   id?: number;
@@ -35,22 +38,23 @@ export function toResult(t: LrclibTrack): LyricsResult | null {
   return null;
 }
 
-async function getJson<T>(url: string): Promise<{ status: number; body: T | null }> {
-  const res = await fetch(url);
-  if (res.status === 404) return { status: 404, body: null };
-  if (!res.ok) throw new Error(`LRCLIB HTTP ${res.status}`);
-  return { status: res.status, body: (await res.json()) as T };
-}
+export const stripParens = (s: string) => s.replace(/\s*[(（[][^)）\]]*[)）\]]\s*/g, ' ').replace(/\s+/g, ' ').trim();
 
 export async function fetchLyrics(q: SongQuery): Promise<LyricsResult | null> {
   const p = new URLSearchParams({ artist_name: q.artist, track_name: q.title });
   if (q.duration) p.set('duration', String(Math.round(q.duration)));
   const got = await getJson<LrclibTrack>(`${API}/get?${p}`);
   if (got.body && (got.body.syncedLyrics || got.body.plainLyrics)) return toResult(got.body);
-  const sp = new URLSearchParams({ track_name: q.title, artist_name: q.artist });
-  const found = await getJson<LrclibTrack[]>(`${API}/search?${sp}`);
-  const best = chooseBest(found.body ?? [], q.duration);
-  return best ? toResult(best) : null;
+  const titles = [q.title];
+  const bare = stripParens(q.title);
+  if (bare && bare !== q.title) titles.push(bare);
+  for (const title of titles) {
+    const sp = new URLSearchParams({ track_name: title, artist_name: q.artist });
+    const found = await getJson<LrclibTrack[]>(`${API}/search?${sp}`);
+    const best = chooseBest(found.body ?? [], q.duration);
+    if (best) return toResult(best);
+  }
+  return null;
 }
 
 export async function searchLyrics(q: string): Promise<LyricsResult[]> {
