@@ -4,9 +4,10 @@ import { rank, scoreCandidate, scriptMismatch, HIGH_SCORE, MIN_SCORE, type Score
 import { resolveKey, overrideKey } from '../lib/keys';
 import { searchTracks, getTrack, toResult, type LrclibTrack } from './lrclib';
 import { searchSongs, lyricFor, type NeteaseSong } from './netease';
+import type { KrLyrics, KrSong, KrSource } from './kr';
 
 /** LyricsResult plus metadata; extra fields survive runtime messaging. */
-export type Candidate = LyricsResult & { duration?: number; source: 'lrclib' | 'netease'; score?: number };
+export type Candidate = LyricsResult & { duration?: number; source: 'lrclib' | 'netease' | KrSource; score?: number };
 export interface Resolved { result: Candidate | null; candidates: Candidate[]; query: SongQuery; partial?: boolean }
 
 const DAY = 24 * 3600 * 1000;
@@ -19,6 +20,8 @@ const SOFT_MS = 2500;
 const SOFT_SCORE = 0.75;
 const NETEASE_QUERIES = 2;
 const NETEASE_LYRICS = 2;
+const KR_QUERIES = 2;
+const KR_LYRICS = 3;
 
 export interface ResolveDeps {
   searchTracks: (q: string) => Promise<LrclibTrack[]>;
@@ -27,8 +30,10 @@ export interface ResolveDeps {
   lyricFor: (s: NeteaseSong) => Promise<LyricsResult | null>;
   now: () => number;
   deadlineMs: number;
+  /** Opt-in Korean personal sources; absent when disabled. */
+  kr?: { search: (q: string) => Promise<KrSong[]>; lyrics: (s: KrSong) => Promise<KrLyrics | null> };
 }
-const defaultDeps: ResolveDeps = { searchTracks, getTrack, searchSongs, lyricFor, now: () => performance.now(), deadlineMs: DEADLINE_MS };
+export const defaultDeps: ResolveDeps = { searchTracks, getTrack, searchSongs, lyricFor, now: () => performance.now(), deadlineMs: DEADLINE_MS };
 
 export function fromLrclibTrack(t: LrclibTrack): Candidate | null {
   if (t.instrumental) return null;
@@ -38,6 +43,11 @@ export function fromLrclibTrack(t: LrclibTrack): Candidate | null {
 
 const candKey = (c: { artist: string; title: string; kind?: string; source?: string }) =>
   `${c.source}|${c.artist.toLowerCase()}|${c.title.toLowerCase()}|${c.kind}`;
+
+/** Rank by score, but any synced candidate above the threshold beats every plain one. */
+export function rankSyncedFirst<T extends Candidate>(cands: T[], sctx: ScoreContext) {
+  return rank(cands, sctx).sort((a, b) => Number(b.item.kind === 'synced') - Number(a.item.kind === 'synced') || b.score - a.score);
+}
 
 /** Simple concurrency limiter. */
 function limiter(n: number) {
@@ -67,7 +77,7 @@ export async function resolveFresh(ctx: ResolveContext, deps: ResolveDeps = defa
       done = true;
       clearTimeout(timer);
       clearTimeout(soft);
-      const ranked = rank([...pool.values()], sctx);
+      const ranked = rankSyncedFirst([...pool.values()], sctx);
       const candidates = ranked.slice(0, 8).map(({ item, score }) => ({ ...item, score }));
       const best = candidates[0] ?? null;
       console.debug(`[uwts] resolve ${ctx.videoId} ${why} in ${Math.round(deps.now() - t0)}ms`,
@@ -83,7 +93,7 @@ export async function resolveFresh(ctx: ResolveContext, deps: ResolveDeps = defa
     const timer = setTimeout(() => finish('deadline'), deps.deadlineMs);
     // soft deadline: a decent synced match is good enough once slow (retrying) requests drag on
     const soft = setTimeout(() => {
-      const top = rank([...pool.values()], sctx)[0];
+      const top = rankSyncedFirst([...pool.values()], sctx)[0];
       if (top && top.item.kind === 'synced' && top.score >= SOFT_SCORE) finish('soft');
     }, SOFT_MS);
     const videoText = `${ctx.videoTitle} ${ctx.chapterTitle ?? ''}`;
@@ -118,6 +128,19 @@ export async function resolveFresh(ctx: ResolveContext, deps: ResolveDeps = defa
           }));
         });
       }
+      if (deps.kr && i < KR_QUERIES) {
+        const kr = deps.kr;
+        job(async () => {
+          const seen = new Set<string>();
+          const scored = (await kr.search(q))
+            .map((s) => ({ s, score: scoreCandidate({ artist: s.artist, title: s.title, duration: s.duration, synced: s.source !== 'melon' }, sctx) }))
+            .filter((x) => x.score >= MIN_SCORE && !seen.has(`${x.s.source}|${x.s.id}`) && seen.add(`${x.s.source}|${x.s.id}`))
+            // synced-capable services first, then score
+            .sort((a, b) => Number(a.s.source === 'melon') - Number(b.s.source === 'melon') || b.score - a.score)
+            .slice(0, KR_LYRICS);
+          await Promise.all(scored.map(async ({ s }) => add(await kr.lyrics(s).catch(() => null))));
+        });
+      }
     });
     void Promise.all(jobs).then(() => finish('complete'));
   });
@@ -127,7 +150,8 @@ interface Stored { v: Resolved; at: number }
 
 /** Cached resolve: user override > storage.local (7d, null 1d) > network. */
 export async function resolveCached(ctx: ResolveContext, deps: ResolveDeps = defaultDeps): Promise<Resolved> {
-  const key = resolveKey(ctx.videoId, ctx.chapterTitle);
+  // toggling personal sources must not serve results cached under the other setting
+  const key = resolveKey(ctx.videoId, ctx.chapterTitle) + (deps.kr ? '|kr' : '');
   const okey = overrideKey(ctx.videoId, ctx.chapterTitle);
   const got = await chrome.storage.local.get([key, okey]).catch(() => ({} as Record<string, unknown>));
   const override = got[okey] as Candidate | undefined;

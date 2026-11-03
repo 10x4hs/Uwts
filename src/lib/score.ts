@@ -145,3 +145,36 @@ export function rankSearch<T extends { artist: string; title: string; kind: stri
     .sort((a, b) => b.s - a.s || Number(b.r.kind === 'synced') - Number(a.r.kind === 'synced'))
     .map((x) => x.r);
 }
+
+export type SearchMatch = 'exact' | 'partial';
+
+/**
+ * Group a search hit: 'exact' when the candidate title (or a parenthetical alternate) equals the
+ * query, the query occurs in the title, the title occurs in the query with every other query token
+ * found in artist+title, or simply all query tokens appear in artist+title. Otherwise 'partial' if
+ * relevance >= 0.5, else null (dropped).
+ */
+export function searchMatch(query: string, artist: string, title: string): SearchMatch | null {
+  const q = normText(query);
+  if (!q) return null;
+  const hay = normText(`${artist} ${title}`);
+  const tn = normText(title);
+  if (tokenOverlap(q, hay) === 1) return 'exact';
+  if (titleVariants(title).some((v) => v === q || phraseIn(q, v)) || phraseIn(q, tn)) return 'exact';
+  return searchRelevance(query, artist, title) >= 0.5 ? 'partial' : null;
+}
+
+/** Search results tagged exact|partial: exact first, then by relevance, synced before plain on ties. */
+export function groupSearch<T extends { artist: string; title: string; kind: string }>(query: string, list: T[]): (T & { match: SearchMatch })[] {
+  const out: { r: T & { match: SearchMatch }; s: number; t: number }[] = [];
+  const q = normText(query);
+  for (const r of list) {
+    const match = searchMatch(query, r.artist, r.title);
+    // t: share of the candidate's words that the query covers (fewer extra words = closer)
+    if (match) out.push({ r: { ...r, match }, s: searchRelevance(query, r.artist, r.title), t: tokenOverlap(normText(`${r.artist} ${r.title}`), q) });
+  }
+  return out
+    .sort((a, b) => Number(b.r.match === 'exact') - Number(a.r.match === 'exact') || b.s - a.s || b.t - a.t
+      || Number(b.r.kind === 'synced') - Number(a.r.kind === 'synced'))
+    .map((x) => x.r);
+}

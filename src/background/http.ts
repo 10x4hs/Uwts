@@ -29,3 +29,18 @@ export async function getJson<T>(url: string, label = 'HTTP', backoff = BACKOFF_
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
+
+/** GET text once with a timeout (unofficial endpoints: fail soft, no retries). */
+export async function getText(url: string, label = 'HTTP'): Promise<string> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: ctl.signal, credentials: 'omit' });
+    if (!res.ok) throw new Error(`${label} HTTP ${res.status}`);
+    return await res.text();
+  } catch (e) {
+    throw e instanceof Error && e.name === 'AbortError' ? new Error(`${label} timeout`) : e;
+  } finally {
+    clearTimeout(timer);
+  }
+}

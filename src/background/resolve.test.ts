@@ -68,3 +68,35 @@ describe('resolveCached', () => {
     expect(r.result?.title).toBe('Mine');
   });
 });
+
+describe('resolveFresh with KR sources', () => {
+  const rctx = { videoId: 'vidkr0001', videoTitle: "RESCENE(리센느) '백화요란 (Inside Out)' MV", channel: 'RESCENE', videoDuration: 215 };
+  it('uses KR synced lyrics and ranks synced above plain', async () => {
+    const r = await resolveFresh(rctx, deps({
+      kr: {
+        search: async () => [
+          { source: 'melon', id: '1', title: '백화요란 (Inside Out)', artist: 'RESCENE (리센느)' },
+          { source: 'genie', id: '2', title: '백화요란 (Inside Out)', artist: 'RESCENE (리센느)', duration: 211 },
+        ],
+        lyrics: async (s) => (s.source === 'melon'
+          ? { kind: 'plain', artist: s.artist, title: s.title, lines: [{ time: -1, text: '기다려 왔던' }], source: 'melon' }
+          : { kind: 'synced', artist: s.artist, title: s.title, lines: [{ time: 10.1, text: '기다려 왔던' }], duration: 211, source: 'genie' }),
+      },
+    }));
+    expect(r.result?.source).toBe('genie');
+    expect(r.result?.kind).toBe('synced');
+  });
+  it('a lower-scored synced candidate still beats a plain one', async () => {
+    const r = await resolveFresh(ctx, deps({
+      searchTracks: async () => [
+        { trackName: 'FASHO', artistName: 'GroovyRoom, pH-1', duration: 424, plainLyrics: 'plain' },
+        { trackName: 'FASHO', artistName: 'GroovyRoom', duration: 300, syncedLyrics: '[00:01.00]hi' },
+      ],
+    }));
+    expect(r.result?.kind).toBe('synced');
+  });
+  it('KR is not queried when disabled', async () => {
+    const r = await resolveFresh(rctx, deps({}));
+    expect(r.result).toBeNull();
+  });
+});

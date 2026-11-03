@@ -5,14 +5,58 @@
     "action": {
       "type": "modifyHeaders",
       "requestHeaders": [
-        { "header": "Origin", "operation": "remove" },
-        { "header": "Referer", "operation": "remove" },
-        { "header": "Cookie", "operation": "remove" }
+        {
+          "header": "Origin",
+          "operation": "remove"
+        },
+        {
+          "header": "Referer",
+          "operation": "remove"
+        },
+        {
+          "header": "Cookie",
+          "operation": "remove"
+        }
       ]
     },
     "condition": {
-      "requestDomains": ["music.163.com"],
-      "resourceTypes": ["xmlhttprequest"]
+      "requestDomains": [
+        "music.163.com"
+      ],
+      "resourceTypes": [
+        "xmlhttprequest"
+      ]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "Origin",
+          "operation": "remove"
+        },
+        {
+          "header": "Referer",
+          "operation": "remove"
+        },
+        {
+          "header": "Cookie",
+          "operation": "remove"
+        }
+      ]
+    },
+    "condition": {
+      "requestDomains": [
+        "bugs.co.kr",
+        "genie.co.kr",
+        "melon.com"
+      ],
+      "resourceTypes": [
+        "xmlhttprequest"
+      ]
     }
   }
 ]
