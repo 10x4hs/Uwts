@@ -1,5 +1,5 @@
-const BACKOFF_MS = [600, 1500, 3000];
-const TIMEOUT_MS = 8000;
+const BACKOFF_MS = [400, 1200];
+const TIMEOUT_MS = 5000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const retryable = (s: number) => s === 429 || s >= 500;

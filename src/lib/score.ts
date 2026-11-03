@@ -125,3 +125,23 @@ export function scriptMismatch(lyricsText: string, videoText: string): boolean {
   const foreign = k + c;
   return foreign >= 20 && foreign > h * 3;
 }
+
+/**
+ * Relevance of a search result to what the user typed: share of query tokens found in
+ * "artist title" (either direction, so short queries like "whiplash" still match).
+ * NetEase returns unrelated popular songs for unknown queries; those score 0.
+ */
+export function searchRelevance(query: string, artist: string, title: string): number {
+  const q = normText(query), hay = normText(`${artist} ${title}`);
+  if (!q || !hay) return 0;
+  return Math.max(tokenOverlap(q, hay), tokenOverlap(normText(title), q));
+}
+
+/** Keep results relevant to the query, most relevant first, synced before plain on ties. */
+export function rankSearch<T extends { artist: string; title: string; kind: string }>(query: string, list: T[]): T[] {
+  return list
+    .map((r) => ({ r, s: searchRelevance(query, r.artist, r.title) }))
+    .filter((x) => x.s >= 0.5)
+    .sort((a, b) => b.s - a.s || Number(b.r.kind === 'synced') - Number(a.r.kind === 'synced'))
+    .map((x) => x.r);
+}

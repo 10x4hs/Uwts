@@ -204,6 +204,14 @@ class Panel {
     permBar.append(permBtn);
     void send({ type: 'perm:status' }).then((r) => { if (r.ok && !r.granted) permBar.hidden = false; }).catch(() => {});
     this.root.append(this.bg, header, permBar, syncRow, this.body, this.toastEl);
+    // Keep typing inside the panel away from YouTube's global hotkeys (t = theater, f = fullscreen,
+    // k/j/l = playback, / = search...), which otherwise fire while the user types a song name.
+    for (const type of ['keydown', 'keypress', 'keyup'] as const) {
+      this.root.addEventListener(type, (e) => {
+        const t = e.target as HTMLElement;
+        if (t.closest('input, textarea, [contenteditable="true"]')) e.stopPropagation();
+      });
+    }
     this.setCollapsed(collapsedPref, false);
     let pressTimer = 0;
     let longPressed = false;
@@ -231,7 +239,19 @@ class Panel {
     this.disposers.push(() => document.removeEventListener('visibilitychange', onVis));
   }
 
-  get alive(): boolean { return nav.isCurrent(this.token) && this.root.isConnected; }
+  destroyed = false;
+  // not tied to isConnected: YouTube may detach the node briefly (theater mode) and rehost() puts it back
+  get alive(): boolean { return nav.isCurrent(this.token) && !this.destroyed; }
+
+  /** YouTube re-renders #secondary (theater/fullscreen toggles, layout changes) and drops our node:
+   *  put the same panel back without losing its state. */
+  rehost(): boolean {
+    if (this.root.isConnected) return true;
+    const host = document.querySelector('#secondary-inner') ?? document.querySelector('#secondary');
+    if (!host || !(host as HTMLElement).offsetParent) return false;
+    host.prepend(this.root);
+    return true;
+  }
 
   mount(): boolean {
     const host = document.querySelector('#secondary-inner') ?? document.querySelector('#secondary');
@@ -255,6 +275,7 @@ class Panel {
   }
 
   destroy() {
+    this.destroyed = true;
     cancelAnimationFrame(this.raf);
     clearTimeout(this.retryTimer);
     clearTimeout(this.searchTimer);
@@ -698,6 +719,9 @@ class Panel {
     form.addEventListener('submit', (e) => { e.preventDefault(); clearTimeout(this.searchTimer); void this.search(input.value); });
     input.addEventListener('input', () => {
       clearTimeout(this.searchTimer);
+      // drop results for the previous text right away so they never look like answers to the new one
+      this.searchSeq++;
+      if (input.value.trim()) this.renderResults([], '검색 중…');
       this.searchTimer = window.setTimeout(() => void this.search(input.value), SEARCH_DEBOUNCE_MS);
     });
     // keep keystrokes away from YouTube shortcuts
@@ -712,7 +736,10 @@ class Panel {
     this.searchEl.hidden = false;
     this.root.classList.add('uw-searching');
     if (wasHidden) {
-      this.searchInput.value = q ? `${q.artist} ${q.title}`.trim() : '';
+      // In multi-song videos the "artist" guess is usually the uploader (e.g. a playlist channel),
+      // so prefill only the song title there; otherwise "artist title".
+      const useArtist = q && this.chapterIndex < 0 && q.artist && q.artist !== this.channel;
+      this.searchInput.value = q ? (useArtist ? `${q.artist} ${q.title}` : q.title).trim() : '';
       this.showCandidates();
     }
     this.body.scrollTop = 0;
@@ -851,7 +878,7 @@ let panel: Panel | null = null;
 
 function sync() {
   const id = videoIdFromUrl();
-  if (panel && panel.videoId === id && panel.root.isConnected) return;
+  if (panel && panel.videoId === id) { panel.rehost(); return; }
   // new navigation: invalidate every in-flight result and reset immediately
   const token = nav.next();
   panel?.destroy();
@@ -879,4 +906,8 @@ chrome.storage?.onChanged.addListener((changes, area) => {
 });
 document.addEventListener('yt-navigate-start', () => { nav.next(); panel?.destroy(); panel = null; });
 document.addEventListener('yt-navigate-finish', sync);
+// re-attach after YouTube re-renders the side column (theater mode, window resizes)
+setInterval(() => {
+  if (panel && !panel.root.isConnected && panel.videoId === videoIdFromUrl()) panel.rehost();
+}, 1000);
 sync();

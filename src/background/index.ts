@@ -1,4 +1,5 @@
 import { EXTRA_ORIGINS, type Request } from '../shared/messages';
+import { rankSearch } from '../lib/score';
 import type { LyricsResult, Palette, SongQuery } from '../shared/types';
 import { fetchLyrics } from './lrclib';
 import { fetchNetease, searchNetease } from './netease';
@@ -89,6 +90,30 @@ async function videoMeta(videoId: string): Promise<VideoMeta> {
   return { title: r.body.title, channel: r.body.author_name ?? '' };
 }
 
+const SEARCH_DEADLINE_MS = 4000;
+const SEARCH_GRACE_MS = 1200;
+
+/** Interactive search over both sources; never waits on a retrying source past SEARCH_DEADLINE_MS. */
+async function searchAll(q: string): Promise<{ results: LyricsResult[]; partial: boolean }> {
+  const t0 = performance.now();
+  const capped = <T,>(p: Promise<T>) =>
+    Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error('search timeout')), SEARCH_DEADLINE_MS))]);
+  const lrc = capped(searchTracks(q).then((ts) => ts.map(fromLrclibTrack).filter((r) => r !== null).slice(0, 10)));
+  const ne = capped(searchNetease(q, 4));
+  // Once NetEase has relevant hits, give the (often 503-retrying) LRCLIB only a short grace period.
+  const lrcGraced = ne.then(
+    (hits) => (rankSearch(q, hits).length
+      ? Promise.race([lrc, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('grace')), SEARCH_GRACE_MS))])
+      : lrc),
+    () => lrc,
+  );
+  const [a, b] = await Promise.allSettled([lrcGraced, ne]);
+  if (a.status === 'rejected' && b.status === 'rejected') throw a.reason;
+  const results = rankSearch(q, [...(a.status === 'fulfilled' ? a.value : []), ...(b.status === 'fulfilled' ? b.value : [])]);
+  console.debug(`[uwts] search "${q}" in ${Math.round(performance.now() - t0)}ms (${results.length})`);
+  return { results, partial: a.status === 'rejected' || b.status === 'rejected' };
+}
+
 async function handle(req: Request): Promise<unknown> {
   switch (req.type) {
     case 'lyrics:get': {
@@ -98,20 +123,15 @@ async function handle(req: Request): Promise<unknown> {
     }
     case 'lyrics:resolve':
       return { ok: true, ...(await resolveCached(req.ctx)) };
-    case 'lyrics:search':
-      return { ok: true, results: await cached(`search:${norm(req.q)}`, async () => {
-        const t0 = performance.now();
-        const [a, b] = await Promise.allSettled([
-          searchTracks(req.q).then((ts) => ts.map(fromLrclibTrack).filter((r) => r !== null).slice(0, 10)),
-          searchNetease(req.q, 4),
-        ]);
-        if (a.status === 'rejected' && b.status === 'rejected') throw a.reason;
-        console.debug(`[uwts] search "${req.q}" in ${Math.round(performance.now() - t0)}ms`);
-        const la = a.status === 'fulfilled' ? a.value : [];
-        const lb = b.status === 'fulfilled' ? b.value : [];
-        // synced first, keep source order otherwise
-        return [...la, ...lb].sort((x, y) => Number(y.kind === 'synced') - Number(x.kind === 'synced'));
-      }) };
+    case 'lyrics:search': {
+      const key = `search:v3:${norm(req.q)}`;
+      const hit = (await chrome.storage.session.get(key))[key] as LyricsResult[] | undefined;
+      if (hit) return { ok: true, results: hit };
+      const { results, partial } = await searchAll(req.q);
+      // a source timed out (LRCLIB 503s): show what we have, but don't cache a partial answer
+      if (!partial) await chrome.storage.session.set({ [key]: results }).catch(() => {});
+      return { ok: true, results };
+    }
     case 'palette:get':
       return { ok: true, palette: await cached(`palette:${req.videoId}`, () => paletteFor(req.videoId)) };
     case 'video:meta': {

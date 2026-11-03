@@ -89,3 +89,18 @@ describe('scriptMismatch', () => {
     expect(scriptMismatch(ja, 'Ed Sheeran - Shape of You')).toBe(false);
   });
 });
+
+import { rankSearch } from './score';
+describe('rankSearch', () => {
+  const R = (artist: string, title: string, kind = 'synced') => ({ artist, title, kind });
+  it('drops unrelated NetEase filler', () => {
+    const out = rankSearch('RESCENE Love Attack', [R('华晨宇', '烟火里的尘埃'), R('RESCENE', 'LOVE ATTACK'), R('墨哥', '烟火里的尘埃(抖音完整版)')]);
+    expect(out.map((x) => x.title)).toEqual(['LOVE ATTACK']);
+  });
+  it('keeps title-only matches for short queries', () => {
+    expect(rankSearch('whiplash', [R('aespa', 'Whiplash'), R('x', 'Other')]).map((x) => x.title)).toEqual(['Whiplash']);
+  });
+  it('handles Hangul queries', () => {
+    expect(rankSearch('비와이 찾으니', [R('BewhY', '찾으니'), R('BewhY', '가라사대')]).map((x) => x.title)).toEqual(['찾으니']);
+  });
+});

@@ -1,0 +1,18 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Origin", "operation": "remove" },
+        { "header": "Referer", "operation": "remove" },
+        { "header": "Cookie", "operation": "remove" }
+      ]
+    },
+    "condition": {
+      "requestDomains": ["music.163.com"],
+      "resourceTypes": ["xmlhttprequest"]
+    }
+  }
+]

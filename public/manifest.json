@@ -3,8 +3,40 @@
   "name": "Uwts Lyrics",
   "version": "0.1.0",
   "description": "Synced lyrics side panel for YouTube music videos.",
-  "permissions": ["storage"],
-  "host_permissions": ["https://lrclib.net/*", "https://i.ytimg.com/*", "https://music.163.com/*", "https://www.youtube.com/*"],
-  "background": { "service_worker": "background.js" },
-  "content_scripts": [{ "matches": ["https://www.youtube.com/*"], "js": ["content.js"], "css": ["content.css"], "run_at": "document_idle" }]
+  "permissions": [
+    "declarativeNetRequestWithHostAccess",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://lrclib.net/*",
+    "https://i.ytimg.com/*",
+    "https://music.163.com/*",
+    "https://www.youtube.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "content.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "netease",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
+  }
 }

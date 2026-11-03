@@ -1,3 +1,4 @@
+import { searchRelevance } from '../lib/score';
 import type { LyricsResult, SongQuery } from '../shared/types';
 import { parseLrc } from '../lib/lrc';
 import { getJson } from './http';
@@ -45,7 +46,7 @@ export function parseNeteaseLrc(lrc: string): LyricsResult['lines'] {
 }
 
 export async function searchSongs(s: string): Promise<NeteaseSong[]> {
-  const p = new URLSearchParams({ s, type: '1', limit: '10' });
+  const p = new URLSearchParams({ s, type: '1', limit: '30' });
   const r = await getJson<{ result?: { songs?: NeteaseSong[] } }>(`${API}/search/get?${p}`, 'NetEase');
   return r.body?.result?.songs ?? [];
 }
@@ -67,7 +68,15 @@ export async function fetchNetease(q: SongQuery): Promise<LyricsResult | null> {
 }
 
 export async function searchNetease(q: string, max = 5): Promise<LyricsResult[]> {
-  const songs = (await searchSongs(q)).slice(0, max);
+  // NetEase ranks differently per region/cookie and pads results with unrelated hits: filter by
+  // relevance on the cheap song metadata first, then fetch lyrics only for the best few.
+  const all = await searchSongs(q);
+  const songs = all
+    .map((song) => ({ song, s: searchRelevance(q, song.artists.map((a) => a.name).join(' '), song.name) }))
+    .filter((x) => x.s >= 0.5)
+    .sort((a, b) => b.s - a.s)
+    .slice(0, max)
+    .map((x) => x.song);
   const res = await Promise.all(songs.map((s) => lyricFor(s).catch(() => null)));
   return res.filter((r): r is LyricsResult => r !== null);
 }
