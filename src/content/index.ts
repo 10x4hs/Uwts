@@ -1,4 +1,4 @@
-import { send } from '../shared/messages';
+import { send, ContextInvalidated } from '../shared/messages';
 import type { Chapter, LyricsResult, Palette, ResolveContext, SongQuery } from '../shared/types';
 import { overrideKey } from '../lib/keys';
 import { buildQueries } from '../lib/queries';
@@ -28,6 +28,26 @@ function videoIdFromUrl(): string | null {
 
 // ---------- page metadata ----------
 const COLLAPSE_KEY = 'uw:collapsed';
+/** Same-origin InnerTube call from the YouTube page itself: no extension host permission needed,
+ *  and it returns the full (untruncated) description and exact length for this exact videoId. */
+async function metaInPage(videoId: string): Promise<{ title: string; channel: string; description: string; duration?: number } | null> {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 4000);
+    const res = await fetch('/youtubei/v1/player?prettyPrint=false', {
+      method: 'POST', credentials: 'same-origin', signal: ctl.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoId, context: { client: { clientName: 'WEB', clientVersion: '2.20241023.01.00', hl: 'ko' } } }),
+    }).finally(() => clearTimeout(timer));
+    if (!res.ok) return null;
+    const v = ((await res.json()) as { videoDetails?: { videoId?: string; title?: string; author?: string; shortDescription?: string; lengthSeconds?: string } }).videoDetails;
+    if (!v?.title || (v.videoId && v.videoId !== videoId)) return null;
+    return { title: v.title, channel: v.author ?? '', description: v.shortDescription ?? '', duration: Number(v.lengthSeconds) || undefined };
+  } catch {
+    return null;
+  }
+}
+
 const offsetKey = (id: string) => `uw:offset:${id}`;
 const LONG_PRESS_MS = 550;
 const ESTIMATE_MS = 15000;
@@ -176,7 +196,14 @@ class Panel {
     this.toastEl.setAttribute('role', 'status');
     this.buildSearch();
     this.body.append(this.searchEl, this.lyricsEl, this.introEl);
-    this.root.append(this.bg, header, syncRow, this.body, this.toastEl);
+    const permBar = el('div', 'uw-perm');
+    permBar.hidden = true;
+    const permBtn = el('button', 'uw-btn uw-perm-btn', '더 많은 곡 찾기: 가사 소스 권한 허용');
+    permBtn.type = 'button';
+    permBtn.addEventListener('click', () => { void send({ type: 'perm:open' }).catch(() => {}); });
+    permBar.append(permBtn);
+    void send({ type: 'perm:status' }).then((r) => { if (r.ok && !r.granted) permBar.hidden = false; }).catch(() => {});
+    this.root.append(this.bg, header, permBar, syncRow, this.body, this.toastEl);
     this.setCollapsed(collapsedPref, false);
     let pressTimer = 0;
     let longPressed = false;
@@ -498,24 +525,38 @@ class Panel {
     setTimeout(() => box.remove(), BURST_MS);
   }
 
+  metaDuration: number | undefined;
+
   // ----- song identification -----
   /** Per-navigation: oEmbed title/channel by videoId, then chapters only from a DOM that matches. */
   async identify() {
     let title = '';
     let channel = '';
-    try {
-      const res = await send({ type: 'video:meta', videoId: this.videoId });
-      if (!this.alive) return;
-      if (res.ok) { title = res.title; channel = res.channel; }
-    } catch { /* fall through */ }
+    let metaDescription: string | undefined;
+    const local = await metaInPage(this.videoId);
+    if (!this.alive) return;
+    if (local) {
+      ({ title, channel } = local);
+      metaDescription = local.description;
+      this.metaDuration = local.duration;
+    } else {
+      try {
+        const res = await send({ type: 'video:meta', videoId: this.videoId });
+        if (!this.alive) return;
+        if (res.ok) { title = res.title; channel = res.channel; metaDescription = res.description; this.metaDuration = res.duration; }
+      } catch { /* fall through */ }
+    }
     if (!this.alive) return;
 
     let description = '';
-    if (title) {
+    if (metaDescription !== undefined) {
+      // full, untruncated description straight from YouTube for this exact videoId
+      description = metaDescription;
+    } else if (title) {
       // only trust the DOM once its h1 has caught up with this video
       for (let waited = 0; waited <= 5000; waited += 250) {
         if (titlesMatch(domTitle(), title)) {
-          description = readDescriptionScript(this.videoId) || (document.querySelector('#description-inner')?.textContent ?? '');
+          description = readDescriptionScript(this.videoId) || (document.querySelector('#description-inner')?.textContent ?? '').replace(/(\.\.\.|…)\s*(더보기|more)\s*$/i, '');
           break;
         }
         await sleep(250);
@@ -539,7 +580,7 @@ class Panel {
   resolveSong(force = false) {
     if (!this.alive || !this.ready) return;
     const t = this.video?.currentTime ?? 0;
-    const dur = this.currentDuration();
+    const dur = this.currentDuration() ?? this.metaDuration;
     const ctx: ResolveContext = { videoId: this.videoId, videoTitle: this.videoTitle, channel: this.channel, videoDuration: dur ? Math.round(dur) : undefined };
     let hueIndex = 0;
     const hit = this.chapters.length ? chapterAt(this.chapters, t) : null;
@@ -594,6 +635,11 @@ class Panel {
       error = res.error;
     } catch (e) {
       if (seq !== this.reqSeq || !this.alive) return;
+      if (e instanceof ContextInvalidated) {
+        // extension was reloaded/updated under this tab: retrying can never work
+        this.dispatch({ type: 'failed', error: '확장 프로그램이 업데이트됐어요. 페이지를 새로고침해 주세요.' });
+        return;
+      }
       error = String(e);
     }
     this.failures++;

@@ -1,4 +1,4 @@
-import type { Request } from '../shared/messages';
+import { EXTRA_ORIGINS, type Request } from '../shared/messages';
 import type { LyricsResult, Palette, SongQuery } from '../shared/types';
 import { fetchLyrics } from './lrclib';
 import { fetchNetease, searchNetease } from './netease';
@@ -63,7 +63,25 @@ async function lyricsFor(q: SongQuery): Promise<LyricsResult | null> {
   return null; // NetEase answered cleanly with nothing -> not found
 }
 
-async function videoMeta(videoId: string): Promise<{ title: string; channel: string }> {
+interface VideoMeta { title: string; channel: string; description?: string; duration?: number }
+
+/** Full metadata from the InnerTube player endpoint (works anonymously): untruncated description
+ *  (chapters) and exact length. Falls back to oEmbed (title/channel only). */
+async function videoMeta(videoId: string): Promise<VideoMeta> {
+  try {
+    const res = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoId, context: { client: { clientName: 'WEB', clientVersion: '2.20241023.01.00', hl: 'ko' } } }),
+    });
+    if (res.ok) {
+      const d = (await res.json()) as { videoDetails?: { title?: string; author?: string; shortDescription?: string; lengthSeconds?: string } };
+      const v = d.videoDetails;
+      if (v?.title) {
+        return { title: v.title, channel: v.author ?? '', description: v.shortDescription ?? '', duration: Number(v.lengthSeconds) || undefined };
+      }
+    }
+  } catch { /* fall back to oEmbed */ }
   const watch = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
   const r = await getJson<{ title?: string; author_name?: string }>(
     `https://www.youtube.com/oembed?${new URLSearchParams({ url: watch, format: 'json' })}`, 'oEmbed');
@@ -97,9 +115,14 @@ async function handle(req: Request): Promise<unknown> {
     case 'palette:get':
       return { ok: true, palette: await cached(`palette:${req.videoId}`, () => paletteFor(req.videoId)) };
     case 'video:meta': {
-      const meta = await cached(`meta:${req.videoId}`, () => videoMeta(req.videoId));
+      const meta = await cached(`meta:v2:${req.videoId}`, () => videoMeta(req.videoId));
       return { ok: true, ...meta };
     }
+    case 'perm:status':
+      return { ok: true, granted: await chrome.permissions.contains({ origins: EXTRA_ORIGINS }) };
+    case 'perm:open':
+      await chrome.tabs.create({ url: chrome.runtime.getURL('grant.html') });
+      return { ok: true };
     default:
       return { ok: false, error: 'unknown request' };
   }
