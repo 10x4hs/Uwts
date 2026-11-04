@@ -687,7 +687,8 @@ class Panel {
   }
 
   onUserScroll(e: WheelEvent) {
-    if (!this.timed) return;
+    // while searching the wheel scrolls the results list natively
+    if (!this.timed || !this.searchEl.hidden) return;
     e.preventDefault();
     this.manualOffset -= e.deltaY;
     const max = this.lyricsEl.scrollHeight;

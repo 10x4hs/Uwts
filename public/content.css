@@ -171,6 +171,7 @@
 .uw-searchpanel { display: flex; flex-direction: column; gap: 10px; padding-bottom: 14px; }
 .uw-searchpanel[hidden], .uw-intro[hidden] { display: none; }
 .uw-searching .uw-lyrics { display: none; }
+.uw-searching .uw-body { overflow-y: auto; scrollbar-width: none; overscroll-behavior: contain; mask-image: none; -webkit-mask-image: none; }
 .uw-search-status { margin: 0; font-size: 13px; color: rgba(255,255,255,.7); }
 .uw-search-status:empty { display: none; }
 .uw-search-status.uw-search-error { color: #ffb4b4; }
