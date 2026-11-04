@@ -208,7 +208,17 @@
 }
 .uw-intro-on .uw-lyrics { opacity: .8; }
 @keyframes uw-intro-bob { 50% { transform: translateY(-3px); } }
-.uw-sync { display: flex; gap: 6px; justify-content: flex-end; padding: 0 16px 6px; position: relative; }
+/* sync buttons: out of the way once lyrics follow; they float over the lyrics (no layout jump)
+   and appear only while the pointer/keyboard is on the panel, or in sync mode */
+.uw-sync {
+  display: flex; gap: 6px; justify-content: flex-end; padding: 0 16px;
+  position: absolute; top: 74px; right: 0; z-index: 5;
+  opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity .2s ease, transform .2s ease;
+}
+.uw-panel:hover .uw-sync, .uw-panel:focus-within .uw-sync, .uw-syncmode .uw-sync { opacity: 1; transform: none; pointer-events: auto; }
+.uw-syncmode .uw-sync-hint { margin-top: 38px; }
+/* before the song starts the intro bar has its own one-tap fix; don't stack buttons on it */
+.uw-intro-on:not(.uw-syncmode) .uw-sync { display: none; }
 .uw-panel .uw-sync-btn {
   width: auto; min-width: 0; height: 30px; min-height: 30px; padding: 0 12px; border-radius: 15px;
   display: inline-flex; align-items: center; white-space: nowrap;
