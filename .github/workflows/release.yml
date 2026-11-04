@@ -23,6 +23,12 @@ jobs:
           # notes = this version's changes (docs/changes/vX.Y.Z.md, optional) + install guide
           { [ -f "docs/changes/$GITHUB_REF_NAME.md" ] && cat "docs/changes/$GITHUB_REF_NAME.md" && echo; cat docs/RELEASE.md; } > notes.md
           cp release/uwts-lyrics-*.zip release/uwts-lyrics.zip # fixed name: README links to releases/latest/download/uwts-lyrics.zip
-          gh release create "$GITHUB_REF_NAME" release/uwts-lyrics-*.zip release/uwts-lyrics.zip --title "Uwts Lyrics $GITHUB_REF_NAME" --notes-file notes.md
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            # tag re-pushed (e.g. history rewrite): refresh the existing release instead of failing
+            gh release upload "$GITHUB_REF_NAME" release/uwts-lyrics-*.zip release/uwts-lyrics.zip --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" release/uwts-lyrics-*.zip release/uwts-lyrics.zip --title "Uwts Lyrics $GITHUB_REF_NAME" --notes-file notes.md
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
