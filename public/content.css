@@ -124,14 +124,38 @@
 .uw-skel-line { height: 24px; border-radius: 10px; background: rgba(255,255,255,.12); animation: uw-pulse 1.4s ease-in-out infinite; }
 .uw-skel-line:nth-child(odd) { width: 80%; } .uw-skel-line:nth-child(even) { width: 60%; }
 @keyframes uw-pulse { 50% { opacity: .45; } }
-.uw-message { display: flex; flex-direction: column; gap: 12px; align-items: stretch; }
-.uw-message-text { font-size: 18px; font-weight: 700; margin: 0; }
+/* empty / error card: centered, own glass surface, never inside the fading top/bottom mask */
+.uw-panel:not([data-status='synced']):not([data-status='plain']) .uw-body { mask-image: none; -webkit-mask-image: none; }
+.uw-message {
+  display: flex; flex-direction: column; align-items: center; text-align: center; gap: 0;
+  margin: 72px 0 0; padding: 26px 22px 22px; border-radius: 24px;
+  background: rgba(0,0,0,.28); border: 1px solid rgba(255,255,255,.16);
+  -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%);
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.22), 0 12px 32px rgba(0,0,0,.18);
+}
+.uw-message-icon {
+  display: grid; place-items: center; width: 52px; height: 52px; margin-bottom: 14px; border-radius: 50%;
+  color: #fff; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.22);
+}
+.uw-message-icon svg { width: 24px; height: 24px; }
+.uw-panel .uw-message-title { margin: 0 0 6px; font-size: 18px; font-weight: 700; line-height: 1.35; color: #fff; letter-spacing: -0.01em; }
+.uw-panel .uw-message-text { margin: 0 0 18px; max-width: 32ch; font-size: 14px; font-weight: 500; line-height: 1.5; color: rgba(255,255,255,.82); word-break: keep-all; text-wrap: balance; }
+.uw-message-actions { display: flex; gap: 8px; width: 100%; }
+.uw-panel .uw-message-btn {
+  flex: 1; min-height: 44px; padding: 0 16px; border-radius: 22px; cursor: pointer;
+  font-family: inherit; font-size: 14px; font-weight: 600; color: #fff;
+  background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.22);
+}
+.uw-panel .uw-message-btn:hover { background: rgba(255,255,255,.2); }
+.uw-panel .uw-message-primary { background: #fff; color: #111; border-color: transparent; }
+.uw-panel .uw-message-primary:hover { background: rgba(255,255,255,.88); }
+.uw-message-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
 .uw-search { display: flex; gap: 8px; }
 .uw-search-input {
   flex: 1; min-height: 44px; padding: 0 14px; border-radius: 22px; border: 1px solid rgba(255,255,255,.18);
   background: rgba(0,0,0,.25); color: #fff; font-size: 14px; font-family: inherit;
 }
-.uw-search-go, .uw-retry { padding: 0 18px; border-radius: 22px; }
+.uw-search-go { padding: 0 18px; border-radius: 22px; }
 .uw-search-error { margin: 0; font-size: 13px; color: #ffb4b4; }
 .uw-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .uw-result {

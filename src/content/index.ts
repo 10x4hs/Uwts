@@ -96,6 +96,10 @@ function icon(d: string): SVGSVGElement {
 }
 const ICON_SEARCH = 'M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM15.5 15.5 20 20';
 const ICON_CHEVRON = 'M6 15l6-6 6 6';
+const ICON_CLOUD_OFF = 'M3 3l18 18M8.5 8.6A5.5 5.5 0 0 0 7 19h9.5M19.6 16.4A4 4 0 0 0 17 9h-.6A6 6 0 0 0 10 5.3';
+const ICON_NOTE = 'M9 18V6l10-2v12M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3ZM19 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3Z';
+const ICON_REFRESH = 'M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6';
+const UPDATED_ERROR = 'extension-updated';
 
 // ---------- panel ----------
 class Panel {
@@ -772,10 +776,10 @@ class Panel {
     if (!force && key === this.ctxKey && this.state.status !== 'error') return;
     this.ctxKey = key;
     this.failures = 0;
-    void this.load(ctx, { artist: guess.artist, title: guess.title, duration: ctx.chapterDuration ?? ctx.videoDuration });
+    void this.load(ctx, { artist: guess.artist, title: guess.title, duration: ctx.chapterDuration ?? ctx.videoDuration }, force);
   }
 
-  async load(ctx: ResolveContext, guess: SongQuery) {
+  async load(ctx: ResolveContext, guess: SongQuery, fresh = false) {
     const seq = ++this.reqSeq;
     clearTimeout(this.retryTimer);
     this.lastCtx = ctx;
@@ -784,7 +788,7 @@ class Panel {
     this.dispatch({ type: 'load', query: guess });
     let error: string | null = null;
     try {
-      const res = await send({ type: 'lyrics:resolve', ctx });
+      const res = await send({ type: 'lyrics:resolve', ctx, fresh });
       if (seq !== this.reqSeq || !this.alive) return;
       if (res.ok) {
         this.failures = 0;
@@ -805,7 +809,7 @@ class Panel {
       if (seq !== this.reqSeq || !this.alive) return;
       if (e instanceof ContextInvalidated) {
         // extension was reloaded/updated under this tab: retrying can never work
-        this.dispatch({ type: 'failed', error: '확장 프로그램이 업데이트됐어요. 페이지를 새로고침해 주세요.' });
+        this.dispatch({ type: 'failed', error: UPDATED_ERROR });
         return;
       }
       error = String(e);
@@ -1011,27 +1015,38 @@ class Panel {
     } else if (s.status === 'notfound') {
       this.renderNotFound();
     } else if (s.status === 'error') {
-      const box = el('div', 'uw-message');
-      box.append(el('p', 'uw-message-text', '가사를 불러오지 못했어요'));
-      const retry = el('button', 'uw-btn uw-retry', '다시 시도');
-      retry.type = 'button';
-      retry.addEventListener('click', () => this.resolveSong(true));
-      box.append(retry);
-      this.lyricsEl.append(box);
+      if (s.error === UPDATED_ERROR) {
+        this.renderMessage(ICON_REFRESH, '확장 프로그램이 업데이트됐어요', '이 탭을 새로고침하면 다시 가사를 보여 드려요.',
+          [['새로고침', () => location.reload()]]);
+      } else {
+        this.renderMessage(ICON_CLOUD_OFF, '가사 서버가 응답하지 않아요', '인터넷 연결을 확인하거나 잠시 뒤 다시 시도해 주세요.',
+          [['다시 시도', () => this.resolveSong(true)], ['직접 검색', () => this.openSearch(true)]]);
+      }
     }
   }
 
-  renderNotFound() {
-    const box = el('div', 'uw-message');
-    box.append(el('p', 'uw-message-text', '가사를 찾지 못했어요'));
-    if (this.searchEl.hidden) {
-      const b = el('button', 'uw-btn uw-retry', '직접 검색');
+  /** Centered glass card for empty/error states: icon, title, one line of help, actions (first = primary). */
+  renderMessage(iconPath: string, title: string, body: string, actions: [string, () => void][]) {
+    const card = el('div', 'uw-message');
+    card.setAttribute('role', 'status');
+    const badge = el('div', 'uw-message-icon');
+    badge.append(icon(iconPath));
+    const btns = el('div', 'uw-message-actions');
+    actions.forEach(([label, fn], i) => {
+      const b = el('button', `uw-btn uw-message-btn${i === 0 ? ' uw-message-primary' : ''}`, label);
       b.type = 'button';
-      b.addEventListener('click', () => this.openSearch(true));
-      box.append(b);
-    }
-    this.lyricsEl.append(box);
-    this.openSearch(false);
+      b.addEventListener('click', fn);
+      btns.append(b);
+    });
+    card.append(badge, el('p', 'uw-message-title', title), el('p', 'uw-message-text', body), btns);
+    this.lyricsEl.append(card);
+  }
+
+  renderNotFound() {
+    const song = this.chapterIndex >= 0 ? this.lastCtx?.chapterTitle : undefined;
+    this.renderMessage(ICON_NOTE, '가사를 찾지 못했어요',
+      song ? `‘${song}’의 가사가 아직 등록되지 않았어요. 제목으로 검색해 보세요.` : '노래 제목이나 가수 이름으로 직접 검색해 보세요.',
+      [['직접 검색', () => this.openSearch(true)], ['다시 시도', () => this.resolveSong(true)]]);
   }
 }
 
