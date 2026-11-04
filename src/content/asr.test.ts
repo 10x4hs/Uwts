@@ -145,6 +145,7 @@ describe('alignToTranscript: synthetic', () => {
     const t0 = performance.now();
     alignToTranscript(lines, big, { start: 0, end: 1200 });
     alignToTranscript(lines.map((l) => ({ ...l, time: -1 })), big, { start: 0, end: 1200 });
-    expect(performance.now() - t0).toBeLessThan(100);
+    // generous: CI runners are several times slower than a laptop; this only guards against blow-ups
+    expect(performance.now() - t0).toBeLessThan(500);
   });
 });
