@@ -123,6 +123,10 @@ const ICON_CLOUD_OFF = 'M3 3l18 18M8.5 8.6A5.5 5.5 0 0 0 7 19h9.5M19.6 16.4A4 4 
 const ICON_NOTE = 'M9 18V6l10-2v12M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3ZM19 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3Z';
 const ICON_REFRESH = 'M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6';
 const UPDATED_ERROR = 'extension-updated';
+/** false once the extension is reloaded/removed under an open tab (orphaned content script). */
+function extensionAlive(): boolean {
+  try { return !!chrome.runtime?.id; } catch { return false; }
+}
 
 // ---------- panel ----------
 class Panel {
@@ -333,6 +337,14 @@ class Panel {
     const host = document.querySelector('#secondary-inner') ?? document.querySelector('#secondary');
     if (!host) return false;
     host.prepend(this.root);
+    // The extension was reloaded/updated under this tab: this script is orphaned and every chrome.*
+    // call throws. Say so instead of leaving an empty panel.
+    if (!extensionAlive()) { this.dispatch({ type: 'failed', error: UPDATED_ERROR }); return true; }
+    try { this.start(); } catch { if (!extensionAlive()) this.dispatch({ type: 'failed', error: UPDATED_ERROR }); }
+    return true;
+  }
+
+  start() {
     this.attachVideo();
     chrome.storage?.local.get(offsetKey(this.videoId)).then((r) => {
       const v = r[offsetKey(this.videoId)];
@@ -349,7 +361,6 @@ class Panel {
       if (this.alive) this.setCollapsed(Boolean(r[COLLAPSE_KEY]), false);
     }).catch(() => {});
     void this.identify();
-    return true;
   }
 
   destroy() {
