@@ -22,6 +22,7 @@ jobs:
         run: |
           # notes = this version's changes (docs/changes/vX.Y.Z.md, optional) + install guide
           { [ -f "docs/changes/$GITHUB_REF_NAME.md" ] && cat "docs/changes/$GITHUB_REF_NAME.md" && echo; cat docs/RELEASE.md; } > notes.md
-          gh release create "$GITHUB_REF_NAME" release/uwts-lyrics-*.zip --title "Uwts Lyrics $GITHUB_REF_NAME" --notes-file notes.md
+          cp release/uwts-lyrics-*.zip release/uwts-lyrics.zip # fixed name: README links to releases/latest/download/uwts-lyrics.zip
+          gh release create "$GITHUB_REF_NAME" release/uwts-lyrics-*.zip release/uwts-lyrics.zip --title "Uwts Lyrics $GITHUB_REF_NAME" --notes-file notes.md
         env:
           GH_TOKEN: ${{ github.token }}
