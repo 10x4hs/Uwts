@@ -88,16 +88,19 @@
 .uw-past { opacity: .85; }
 .uw-line:hover:not(.uw-current):not(.uw-plain) { color: rgba(255,255,255,.7); filter: none; }
 .uw-done { color: #fff; transition: var(--uw-move), filter .6s ease, opacity .6s ease; }
-.uw-current {
-  transform: translateY(calc(var(--uw-y) + var(--uw-m))) scale(1);
+.uw-current { transform: translateY(calc(var(--uw-y) + var(--uw-m))) scale(1); }
+/* Karaoke fill on the inline text: with box-decoration-break: slice the background of a wrapped
+   inline is laid out as one strip across its rows, so N% means N% of the whole sung line. */
+.uw-current .uw-text {
   color: transparent; -webkit-text-fill-color: transparent;
   background-color: rgba(255,255,255,.45);
   background-image: linear-gradient(90deg, #fff 0%, #fff calc(100% - .75em), transparent 100%);
   background-repeat: no-repeat; background-size: 0% 100%;
+  -webkit-box-decoration-break: slice; box-decoration-break: slice;
   -webkit-background-clip: text; background-clip: text;
   animation: uw-fill var(--uw-dur, 3s) linear var(--uw-fill-delay, 0s) forwards;
 }
-.uw-vpaused .uw-current { animation-play-state: paused; }
+.uw-vpaused .uw-current .uw-text { animation-play-state: paused; }
 @keyframes uw-fill { from { background-size: 0% 100%; } to { background-size: calc(100% + .75em) 100%; } }
 /* manual scroll: follow the finger immediately, no blur */
 .uw-manual .uw-line { filter: none; transition: transform 0s, color .6s ease; }
@@ -180,14 +183,13 @@
 @media (prefers-reduced-motion: reduce) {
   .uw-panel, .uw-line, .uw-chip, .uw-collapse-btn svg, .uw-bg { transition: none; }
   .uw-mesh { animation: none; }
-  .uw-current { animation: none; background-size: calc(100% + .75em) 100%; }
+  .uw-current .uw-text { animation: none; background-size: calc(100% + .75em) 100%; }
   .uw-burst { display: none; }
   .uw-skel-line { animation: none; }
 }
 
 /* ---------- sync: voice fill, intro, manual offset ---------- */
-.uw-current.uw-voice { animation: none; background-size: var(--uw-fill-size, 0%) 100%; transition: var(--uw-move), background-size .09s linear, filter .6s ease, opacity .6s ease; }
-.uw-manual .uw-current.uw-voice { transition: transform 0s, background-size .09s linear; }
+.uw-current.uw-voice .uw-text { animation: none; background-size: var(--uw-fill-size, 0%) 100%; transition: background-size .09s linear; }
 .uw-intro {
   position: relative; z-index: 3; display: flex; align-items: center; gap: 10px;
   margin: 0 16px 8px; padding: 8px 8px 8px 14px; border-radius: 16px;
@@ -235,7 +237,7 @@
 .uw-toast-on { opacity: 1; transform: translate(-50%, 0); }
 @media (prefers-reduced-motion: reduce) {
   .uw-intro-note { animation: none; }
-  .uw-current.uw-voice { transition: none; }
+  .uw-current.uw-voice .uw-text { transition: none; }
   .uw-toast { transition: none; }
 }
 

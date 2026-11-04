@@ -595,7 +595,7 @@ class Panel {
 
   /** Cumulative pixel widths of the line's text per character (for word-by-word fill). */
   measure(line: HTMLElement): number[] {
-    const node = line.firstChild;
+    const node = line.querySelector('.uw-text')?.firstChild ?? line.firstChild;
     const text = node?.textContent ?? '';
     const cum = [0];
     if (!node || node.nodeType !== Node.TEXT_NODE) return cum;
@@ -1116,7 +1116,10 @@ class Panel {
       if (s.overridden) this.titleEl.textContent = displayTitle(s.result.title);
       if (!synced) this.lyricsEl.append(el('p', 'uw-hint', '‘싱크 맞추기’를 누르고, 부르는 줄을 두세 번 눌러 주면 노래방처럼 따라가요'));
       s.result.lines.forEach((line, i) => {
-        const p = el('p', 'uw-line uw-future', line.text || '♪');
+        const p = el('p', 'uw-line uw-future');
+        // the fill lives on an inline span: a wrapped line is filled as one continuous strip
+        // (row 1 first, then row 2) instead of every row filling to the same x at once
+        p.append(el('span', 'uw-text', line.text || '♪'));
         p.dataset.index = String(i);
         if (this.anchors.some((a) => a.lineIndex === i)) p.classList.add('uw-anchored');
         if (synced) {
