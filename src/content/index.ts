@@ -32,6 +32,10 @@ function videoIdFromUrl(): string | null {
 
 // ---------- page metadata ----------
 const COLLAPSE_KEY = 'uw:collapsed';
+const SIZE_KEY = 'uw:size';
+const MIN_W = 300;
+const MIN_H = 220;
+const SIZE_STEP = 20;
 /** A pause between sung lines this long (seconds) shows the interlude waveform. */
 const BREAK_MIN_SEC = 6;
 /** Appear a moment after the line ends; collapse before the next line so its position is final. */
@@ -268,6 +272,8 @@ class Panel {
   introText = el('span', 'uw-intro-text', '');
   introBtn = el('button', 'uw-btn uw-chip uw-intro-btn', '지금 시작됐어요');
   toastEl = el('div', 'uw-toast');
+  resizeEl = el('button', 'uw-resize');
+  size: { w: number; h: number } | null = null;
 
   constructor(videoId: string, token: number) {
     this.videoId = videoId;
@@ -362,7 +368,8 @@ class Panel {
       updBar.hidden = false;
     }).catch(() => {});
     // intro bar sits outside the scrolling/faded lyrics body so it stays crisp
-    this.root.append(this.bg, header, permBar, updBar, syncRow, this.syncHint, this.introEl, this.body, this.toastEl);
+    this.buildResize();
+    this.root.append(this.bg, header, permBar, updBar, syncRow, this.syncHint, this.introEl, this.body, this.toastEl, this.resizeEl);
     // Keep typing inside the panel away from YouTube's global hotkeys (t = theater, f = fullscreen,
     // k/j/l = playback, / = search...), which otherwise fire while the user types a song name.
     for (const type of ['keydown', 'keypress', 'keyup'] as const) {
@@ -457,6 +464,10 @@ class Panel {
       this.refresh();
     }).catch(() => {});
     this.estTimer = window.setInterval(() => this.autoEstimate(), ESTIMATE_MS);
+    chrome.storage?.local.get(SIZE_KEY).then((r) => {
+      const v = r[SIZE_KEY];
+      if (this.alive && v && typeof v.w === 'number' && typeof v.h === 'number') this.setSize(v, false);
+    }).catch(() => {});
     // re-read persisted collapse state (another tab may have changed it)
     chrome.storage?.local.get(COLLAPSE_KEY).then((r) => {
       if (this.alive) this.setCollapsed(Boolean(r[COLLAPSE_KEY]), false);
@@ -475,6 +486,65 @@ class Panel {
     this.tracker?.destroy();
     this.disposers.forEach((d) => d());
     this.root.remove();
+  }
+
+  /** Corner handle: drag to resize (width up to YouTube's column), arrows nudge, double-click resets. */
+  buildResize() {
+    const h = this.resizeEl;
+    h.type = 'button';
+    h.setAttribute('aria-label', '패널 크기 조절 (화살표 키로 조절, 더블클릭하면 원래 크기)');
+    h.title = '끌어서 크기 조절 · 더블클릭하면 원래 크기';
+    h.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      h.setPointerCapture(e.pointerId);
+      const x0 = e.clientX, y0 = e.clientY;
+      const w0 = this.root.offsetWidth, h0 = this.body.offsetHeight;
+      this.root.classList.add('uw-resizing');
+      let frame = 0;
+      const move = (ev: PointerEvent) => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => this.setSize({ w: w0 + ev.clientX - x0, h: h0 + ev.clientY - y0 }, false));
+      };
+      const up = () => {
+        h.removeEventListener('pointermove', move);
+        h.removeEventListener('pointerup', up);
+        h.removeEventListener('pointercancel', up);
+        this.root.classList.remove('uw-resizing');
+        if (this.size) this.setSize(this.size, true);
+      };
+      h.addEventListener('pointermove', move);
+      h.addEventListener('pointerup', up);
+      h.addEventListener('pointercancel', up);
+    });
+    h.addEventListener('dblclick', () => this.setSize(null, true));
+    h.addEventListener('keydown', (e) => {
+      const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+      if (!d) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.setSize({ w: this.root.offsetWidth + d[0] * SIZE_STEP, h: this.body.offsetHeight + d[1] * SIZE_STEP }, true);
+    });
+  }
+
+  /** Apply (and optionally save) a panel size; null = the default size. */
+  setSize(size: { w: number; h: number } | null, persist: boolean) {
+    if (size) {
+      const maxW = this.root.parentElement?.clientWidth || 600;
+      const maxH = Math.max(MIN_H, Math.round(window.innerHeight * 0.85));
+      size = {
+        w: Math.round(Math.min(maxW, Math.max(MIN_W, size.w))),
+        h: Math.round(Math.min(maxH, Math.max(MIN_H, size.h))),
+      };
+      this.root.style.setProperty('--uw-w', `${size.w}px`);
+      this.root.style.setProperty('--uw-h', `${size.h}px`);
+    } else {
+      this.root.style.removeProperty('--uw-w');
+      this.root.style.removeProperty('--uw-h');
+    }
+    this.size = size;
+    if (persist) chrome.storage?.local.set({ [SIZE_KEY]: size }).catch(() => {});
+    if (this.timed && this.tracksEl.hidden) this.follow();
   }
 
   setCollapsed(c: boolean, persist: boolean) {

@@ -7,7 +7,7 @@
   --uw-from: #2a1f4a; --uw-to: #0f1a2e; --uw-glow: #b8a6ff;
   --uw-font: -apple-system, 'SF Pro Display', 'Apple SD Gothic Neo', 'Noto Sans KR', sans-serif;
   position: relative; isolation: isolate;
-  box-sizing: border-box; width: 420px; max-width: 100%; margin: 0 0 16px;
+  box-sizing: border-box; width: var(--uw-w, 420px); max-width: 100%; margin: 0 0 16px;
   border-radius: 24px; overflow: hidden; color: #fff;
   background: linear-gradient(160deg, var(--uw-from), var(--uw-to));
   border: 1px solid rgba(255,255,255,.18);
@@ -69,7 +69,7 @@
 
 /* ---------- lyrics ---------- */
 .uw-body {
-  position: relative; height: 440px; overflow: hidden; padding: 0 22px;
+  position: relative; height: var(--uw-h, 440px); overflow: hidden; padding: 0 22px;
   mask-image: linear-gradient(transparent, #000 12%, #000 82%, transparent);
 }
 .uw-lyrics { --uw-y: 0px; --uw-m: 0px; position: relative; display: flex; flex-direction: column; gap: 22px; padding-bottom: 300px; }
@@ -307,3 +307,18 @@
 .uw-sub-link:focus-visible { outline: 2px solid var(--uw-glow); outline-offset: 2px; border-radius: 4px; }
 .uw-tracks-btn[aria-pressed='true'] { background: #fff; color: #222; }
 @media (prefers-reduced-motion: reduce) { .uw-track-eq i { animation: none; height: 8px; } }
+
+/* ---------- resize handle (bottom-right corner, shown on hover) ---------- */
+.uw-resize {
+  position: absolute; right: 0; bottom: 0; z-index: 6; width: 28px; height: 28px; padding: 0; border: 0;
+  background: none; cursor: nwse-resize; touch-action: none; opacity: 0; transition: opacity .2s ease;
+}
+.uw-resize::after {
+  content: ''; position: absolute; right: 8px; bottom: 8px; width: 10px; height: 10px;
+  border-right: 2px solid rgba(255,255,255,.7); border-bottom: 2px solid rgba(255,255,255,.7); border-bottom-right-radius: 4px;
+}
+.uw-panel:hover .uw-resize, .uw-resize:focus-visible, .uw-resizing .uw-resize { opacity: 1; }
+.uw-resize:focus-visible { outline: 2px solid var(--uw-glow); outline-offset: -4px; border-radius: 8px; }
+.uw-collapsed .uw-resize { display: none; }
+.uw-resizing, .uw-resizing * { user-select: none; }
+.uw-resizing .uw-line { transition: none; }
