@@ -46,8 +46,15 @@ const candKey = (c: { artist: string; title: string; kind?: string; source?: str
 
 /** Rank by score, but any synced candidate above the threshold beats every plain one. */
 export function rankSyncedFirst<T extends Candidate>(cands: T[], sctx: ScoreContext) {
-  return rank(cands, sctx).sort((a, b) => Number(b.item.kind === 'synced') - Number(a.item.kind === 'synced') || b.score - a.score);
+  const words = (c: Candidate) => Number(c.kind === 'synced' && c.lines.some((l) => l.words?.length));
+  return rank(cands, sctx).sort((a, b) => Number(b.item.kind === 'synced') - Number(a.item.kind === 'synced')
+    // word-by-word timing wins over line timing for (nearly) the same match
+    || (Math.abs(b.score - a.score) < WORDS_EDGE ? words(b.item) - words(a.item) : 0)
+    || b.score - a.score);
 }
+const WORDS_EDGE = 0.1;
+/** After a confident line-timed hit, wait this long for a word-timed version of the same song. */
+const WORDS_GRACE_MS = 600;
 
 /** Simple concurrency limiter. */
 function limiter(n: number) {
@@ -73,11 +80,13 @@ export async function resolveFresh(ctx: ResolveContext, deps: ResolveDeps = defa
 
   return new Promise<Resolved>((resolve) => {
     let done = false;
+    let grace: ReturnType<typeof setTimeout> | undefined;
     const finish = (why: string) => {
       if (done) return;
       done = true;
       clearTimeout(timer);
       clearTimeout(soft);
+      if (grace) clearTimeout(grace);
       const ranked = rankSyncedFirst([...pool.values()], sctx);
       const candidates = ranked.slice(0, 8).map(({ item, score }) => ({ ...item, score }));
       const best = candidates[0] ?? null;
@@ -104,7 +113,10 @@ export async function resolveFresh(ctx: ResolveContext, deps: ResolveDeps = defa
       if (scriptMismatch(c.lines.map((l) => l.text).join(' '), videoText)) return; // e.g. Japanese version of a K-pop MV
       const k = candKey(c);
       if (!pool.has(k)) pool.set(k, c);
-      if (c.kind === 'synced' && scoreCandidate(c, sctx) >= HIGH_SCORE) finish('early');
+      if (c.kind === 'synced' && scoreCandidate(c, sctx) >= HIGH_SCORE) {
+        if (c.lines.some((l) => l.words?.length)) finish('early');
+        else grace ??= setTimeout(() => finish('early'), WORDS_GRACE_MS);
+      }
     };
     const jobs: Promise<unknown>[] = [];
     const job = (fn: () => Promise<void>) => {

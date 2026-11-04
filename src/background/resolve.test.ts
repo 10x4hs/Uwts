@@ -27,6 +27,15 @@ describe('resolveFresh', () => {
     expect(r.result?.artist).toBe('GroovyRoom, pH-1');
     expect(r.candidates.length).toBeGreaterThanOrEqual(1);
   });
+  it('prefers a word-timed version that arrives shortly after a line-timed hit', async () => {
+    const wordy = { kind: 'synced' as const, artist: 'GroovyRoom', title: 'FASHO', lines: [{ time: 1, text: 'x', words: [{ t: 1, d: 0.5, c: 0 }] }] };
+    const r = await resolveFresh(ctx, deps({ deadlineMs: 5000,
+      searchTracks: async (q) => (q === 'GroovyRoom FASHO' ? [good] : []),
+      searchSongs: async () => [{ id: 1, name: 'FASHO', artists: [{ name: 'GroovyRoom' }], duration: 424000 }],
+      lyricFor: async () => { await new Promise((res) => setTimeout(res, 200)); return wordy; },
+    }));
+    expect(r.result?.source).toBe('netease');
+  });
   it('returns null (not a wrong song) when nothing matches', async () => {
     const r = await resolveFresh(ctx, deps({ searchTracks: async () => [{ trackName: 'Other', artistName: 'X', syncedLyrics: '[00:01.00]a' }] }));
     expect(r.result).toBeNull();

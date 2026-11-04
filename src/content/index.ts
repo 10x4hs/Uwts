@@ -5,7 +5,7 @@ import { buildQueries } from '../lib/queries';
 import { parseChapters, chapterAt } from '../lib/chapters';
 import { lineIndexAt } from '../lib/lrc';
 import { shiftHue } from '../lib/color';
-import { blurLevel, staggerDelay, scrollOffset, fillTiming, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
+import { blurLevel, staggerDelay, scrollOffset, fillTiming, singingPace, wordChar, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
 import { segments, unitsToChar, priorOffset, estimateOffset, smoothOffset, isIntro, FillTracker, type Segment } from './align';
 import { VocalTracker } from './audio';
 import { addAnchor, timedLines, parseAnchors, groupByMatch, type Anchor } from './anchors';
@@ -608,12 +608,13 @@ class Panel {
     this.lastLyricT = lt;
     if (!cur || !this.fill || reducedMotion()) return;
     const dt = Math.min(0.1, Math.max(0, lt - prevT)) || 0;
-    const p = this.fill.step(lt, dt, this.tracker?.activity ?? 0);
     const total = this.fillCum[this.fillCum.length - 1] || 1;
-    const c = unitsToChar(this.fillSegs, p);
+    const line = this.timed?.[this.current];
+    // word-timed lyrics: follow the source's own per-word timing; else voice activity
+    const c = line?.words?.length ? wordChar(line, lt) : unitsToChar(this.fillSegs, this.fill.step(lt, dt, this.tracker?.activity ?? 0));
     const i = Math.floor(c);
     const x = (this.fillCum[i] ?? total) + ((this.fillCum[i + 1] ?? total) - (this.fillCum[i] ?? total)) * (c - i);
-    const f = this.fill.fraction() >= 1 ? 1 : Math.min(1, x / total);
+    const f = !line?.words?.length && this.fill.fraction() >= 1 ? 1 : Math.min(1, x / total);
     cur.style.setProperty('--uw-fill-size', `calc(${(f * 100).toFixed(2)}% + ${(f * 0.75).toFixed(3)}em)`);
   }
 
@@ -665,15 +666,23 @@ class Panel {
     if (prev || i === 0) this.burst(cur);
   }
 
+  private paceLines: LyricLine[] | null = null;
+  private pace: number | undefined;
+  /** Singing pace of the displayed lyrics (recomputed when the timed lines change). */
+  paceOf(lines: LyricLine[]): number | undefined {
+    if (this.paceLines !== lines) { this.paceLines = lines; this.pace = singingPace(lines); }
+    return this.pace;
+  }
+
   /** Start (or restart) the karaoke fill on the active line. */
   applyFill(restart: boolean) {
     const cur = this.lineEls[this.current];
     const lines = this.timed;
     if (!cur || !lines || !this.video) return;
     const lt = this.lyricTime();
-    const f = fillTiming(lines, this.current, lt, this.video.playbackRate);
+    const f = fillTiming(lines, this.current, lt, this.video.playbackRate, this.paceOf(lines));
     if (!f) return;
-    const voice = !!this.tracker?.ready && !reducedMotion();
+    const voice = (!!lines[this.current].words?.length || !!this.tracker?.ready) && !reducedMotion();
     cur.classList.toggle('uw-voice', voice);
     if (voice) {
       const line = lines[this.current];
@@ -1125,6 +1134,8 @@ class Panel {
     this.current = -1;
     // karaoke only when the source is synced or anchors make it synced
     this.timed = (s.status === 'synced' || s.status === 'plain') && s.result ? timedLines(s.result.kind, s.result.lines, this.effectiveAnchors()) : null;
+    // debug breadcrumb: 'word' = per-word karaoke timing from the source, 'pace' = line timing + pace estimate
+    this.root.dataset.fill = this.timed?.some((l) => l.words?.length) ? 'word' : this.timed ? 'pace' : '';
     const synced = !!this.timed;
     this.root.dataset.status = synced ? 'synced' : s.status;
     this.updateReset();

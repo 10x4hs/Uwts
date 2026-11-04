@@ -56,7 +56,12 @@ export function mapSynced(lines: LyricLine[], anchors: Anchor[]): LyricLine[] {
     xs.push(x); ys.push(a.videoTime);
   }
   const times = monotonic(lines.map((l) => (l.time < 0 ? NaN : piecewise(xs, ys, l.time))));
-  return lines.map((l, i) => ({ ...l, time: l.time < 0 ? l.time : Math.max(0, times[i]) }));
+  return lines.map((l, i) => {
+    if (l.time < 0) return l;
+    const time = Math.max(0, times[i]);
+    const shift = time - l.time;
+    return l.words ? { ...l, time, words: l.words.map((w) => ({ ...w, t: w.t + shift })) } : { ...l, time };
+  });
 }
 
 /**

@@ -1,6 +1,7 @@
 import { searchRelevance } from '../lib/score';
 import type { LyricsResult, SongQuery } from '../shared/types';
 import { parseLrc } from '../lib/lrc';
+import { parseYrc } from '../lib/yrc';
 import { getJson } from './http';
 
 export interface NeteaseSong { id: number; name: string; artists: { name: string }[]; duration?: number }
@@ -45,6 +46,10 @@ export function parseNeteaseLrc(lrc: string): LyricsResult['lines'] {
   return parseLrc(lrc).filter((l) => !META_RE.test(l.text));
 }
 
+export function parseNeteaseYrc(yrc: string): LyricsResult['lines'] {
+  return parseYrc(yrc, (t) => META_RE.test(t));
+}
+
 export async function searchSongs(s: string): Promise<NeteaseSong[]> {
   const p = new URLSearchParams({ s, type: '1', limit: '30' });
   const r = await getJson<{ result?: { songs?: NeteaseSong[] } }>(`${API}/search/get?${p}`, 'NetEase');
@@ -52,11 +57,15 @@ export async function searchSongs(s: string): Promise<NeteaseSong[]> {
 }
 
 export async function lyricFor(song: NeteaseSong): Promise<LyricsResult | null> {
-  const r = await getJson<{ lrc?: { lyric?: string } }>(`${API}/song/lyric?id=${song.id}&lv=1`, 'NetEase');
+  // v1 also returns "yrc" (word-by-word timing) for the songs NetEase has karaoke lyrics for
+  const r = await getJson<{ lrc?: { lyric?: string }; yrc?: { lyric?: string } }>(`${API}/song/lyric/v1?id=${song.id}&lv=1&yv=1&tv=-1`, 'NetEase');
   const text = r.body?.lrc?.lyric;
   if (!text) return null;
   const artist = song.artists.map((a) => a.name).join(', ');
   const lines = parseNeteaseLrc(text);
+  const words = parseNeteaseYrc(r.body?.yrc?.lyric ?? '');
+  // only trust yrc when it covers the same lyrics (not a short excerpt)
+  if (words.length && words.length >= lines.length * 0.8) return { kind: 'synced', artist, title: song.name, lines: words };
   if (lines.length) return { kind: 'synced', artist, title: song.name, lines };
   const plain = text.split(/\r?\n/).filter((t) => t.trim() && !META_RE.test(t)).map((t) => ({ time: -1, text: t }));
   return plain.length ? { kind: 'plain', artist, title: song.name, lines: plain } : null;

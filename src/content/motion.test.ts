@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { blurLevel, staggerDelay, scrollOffset, fillTiming, fillProgress, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
+import { blurLevel, staggerDelay, scrollOffset, fillTiming, fillProgress, singingPace, sungSeconds, wordChar, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
 
 const lines = [{ time: 10, text: 'a' }, { time: 13, text: 'b' }, { time: 30, text: 'c' }];
 
@@ -73,5 +73,25 @@ describe('misc', () => {
     expect(n.isCurrent(a)).toBe(true);
     n.next();
     expect(n.isCurrent(a)).toBe(false);
+  });
+});
+
+describe('singing pace', () => {
+  // 8 syllables each, sung back to back every 2s, then one line before a 20s break
+  const t = '하나둘셋넷다섯여섯';
+  const lines = [0, 2, 4, 6, 8, 10, 30].map((time) => ({ time, text: t.slice(0, 8) }));
+  it('learns seconds per syllable from tight lines', () => expect(singingPace(lines)).toBeCloseTo(0.25, 2));
+  it('a line before a break fills at the song pace, not over the whole gap', () => {
+    const pace = singingPace(lines);
+    expect(fillTiming(lines, 5, 10, 1, pace)?.duration).toBeCloseTo(8 * 0.25 * 1.2 + 0.35, 2);
+    expect(fillTiming(lines, 0, 0, 1, pace)?.duration).toBe(2); // tight line keeps its slot
+  });
+  it('too few lines -> no estimate', () => expect(singingPace(lines.slice(0, 3))).toBeUndefined());
+  it('word-timed line ends with its last word', () => {
+    const l = { time: 1, text: 'ab cd', words: [{ t: 1, d: 0.5, c: 0 }, { t: 2, d: 0.5, c: 3 }] };
+    expect(sungSeconds(l, 6)).toBe(1.5);
+    expect(wordChar(l, 1.25)).toBeCloseTo(1.5);
+    expect(wordChar(l, 1.8)).toBe(3); // gap: wait at the next word
+    expect(wordChar(l, 3)).toBe(5);
   });
 });

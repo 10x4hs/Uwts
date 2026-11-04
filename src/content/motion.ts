@@ -1,4 +1,5 @@
 import type { LyricLine } from '../shared/types';
+import { countUnits } from './align';
 
 /** Fraction of the container height where the active line is anchored. */
 export const ANCHOR = 0.35;
@@ -26,18 +27,66 @@ export function scrollOffset(lineTop: number, containerHeight: number, anchor = 
 }
 
 /**
- * Karaoke fill timing for line i at media time t (seconds, relative to the song start).
- * Duration = next.time - line.time capped at MAX_FILL_SEC (cap used for the last line);
- * delay is negative when entering mid-line. Both are scaled to wall-clock by playbackRate.
+ * The song's singing pace (seconds per sung unit), learned from its own line timings.
+ * A line's slot (until the next line) is often much longer than the singing itself
+ * (instrumental breaks, held pauses), so the low-ish percentile of slot/units is used.
  */
-export function fillTiming(lines: LyricLine[], i: number, t: number, rate = 1): { duration: number; delay: number } | null {
+export function singingPace(lines: LyricLine[]): number | undefined {
+  const r: number[] = [];
+  for (let i = 0; i + 1 < lines.length; i++) {
+    const a = lines[i], span = lines[i + 1].time - a.time;
+    const u = countUnits(a.text);
+    if (a.time < 0 || u < 3 || span <= 0.3) continue;
+    r.push(span / u);
+  }
+  if (r.length < 4) return undefined;
+  r.sort((x, y) => x - y);
+  return Math.min(PACE_MAX, Math.max(PACE_MIN, r[Math.floor(PACE_Q * (r.length - 1))]));
+}
+export const PACE_MIN = 0.1;
+export const PACE_MAX = 0.8;
+const PACE_Q = 0.4;
+/** Slack over the estimate: a held last note, breaths. */
+const SUNG_SCALE = 1.2;
+const SUNG_PAD = 0.35;
+const SUNG_MIN = 0.8;
+
+/** How long line `line` is probably sung for, given its slot `span` and the song pace. */
+export function sungSeconds(line: LyricLine, span: number, pace?: number): number {
+  const w = line.words;
+  if (w?.length) return Math.min(span, Math.max(0, w[w.length - 1].t + w[w.length - 1].d - line.time));
+  if (!pace) return span;
+  return Math.min(span, Math.max(SUNG_MIN, countUnits(line.text) * pace * SUNG_SCALE + SUNG_PAD));
+}
+
+/**
+ * Karaoke fill timing for line i at media time t (seconds, relative to the song start).
+ * Duration = the line's sung time: next.time - line.time capped at MAX_FILL_SEC (cap used for
+ * the last line), shortened to the pace estimate (or the last word's end) so a line followed by
+ * a break doesn't crawl. Delay is negative when entering mid-line. Scaled to wall-clock by playbackRate.
+ */
+export function fillTiming(lines: LyricLine[], i: number, t: number, rate = 1, pace?: number): { duration: number; delay: number } | null {
   const line = lines[i];
   if (!line || line.time < 0) return null;
   const next = lines[i + 1];
-  const span = next ? Math.min(MAX_FILL_SEC, Math.max(0, next.time - line.time)) : MAX_FILL_SEC;
+  const slot = next ? Math.min(MAX_FILL_SEC, Math.max(0, next.time - line.time)) : MAX_FILL_SEC;
+  const span = sungSeconds(line, slot, pace);
   const r = rate > 0 ? rate : 1;
   const elapsed = Math.min(span, Math.max(0, t - line.time));
   return { duration: round3(span / r), delay: -round3(elapsed / r) };
+}
+
+/** Fractional character position reached at lyric time t on a line with word timing. */
+export function wordChar(line: LyricLine, t: number): number {
+  const w = line.words ?? [];
+  const len = line.text.length;
+  for (let k = 0; k < w.length; k++) {
+    const a = w[k];
+    const end = w[k + 1]?.c ?? len;
+    if (t < a.t) return a.c; // waiting for this word
+    if (t < a.t + a.d) return a.c + (end - a.c) * ((t - a.t) / Math.max(0.01, a.d));
+  }
+  return len;
 }
 
 /** Fill progress in [0,1] for line i at time t (for non-animated/fallback rendering). */

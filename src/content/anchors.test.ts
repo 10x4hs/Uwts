@@ -74,3 +74,10 @@ describe('misc', () => {
     expect(parseAnchors('nope')).toEqual([]);
   });
 });
+
+describe('mapSynced with word timing', () => {
+  it('shifts words with their line', () => {
+    const l = [{ time: 10, text: 'a', words: [{ t: 10.5, d: 0.2, c: 0 }] }, { time: 20, text: 'b' }];
+    expect(mapSynced(l, [{ lineIndex: 0, videoTime: 12 }])[0].words?.[0].t).toBeCloseTo(12.5);
+  });
+});
