@@ -9,6 +9,8 @@ import { blurLevel, staggerDelay, scrollOffset, fillTiming, isSeek, titlesMatch,
 import { segments, unitsToChar, priorOffset, estimateOffset, smoothOffset, isIntro, FillTracker, type Segment } from './align';
 import { VocalTracker } from './audio';
 import { addAnchor, timedLines, parseAnchors, groupByMatch, type Anchor } from './anchors';
+import { timelineParams, parseTimeline, songChapters, type Timeline } from '../lib/timeline';
+import { alignToTranscript, type TranscriptSeg } from './asr';
 import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, displayTitle, displayArtist, type Action, type PanelState } from './state';
 
 const PARTICLES = 14;
@@ -48,6 +50,27 @@ async function metaInPage(videoId: string): Promise<{ title: string; channel: st
     return null;
   }
 }
+
+/** YouTube's "동영상 정보 → 타임라인" panel: Content ID song cards + auto-captions, same-origin like the player call. */
+async function timelineInPage(videoId: string): Promise<Timeline | null> {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 6000);
+    const res = await fetch('/youtubei/v1/get_panel?prettyPrint=false', {
+      method: 'POST', credentials: 'same-origin', signal: ctl.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context: { client: { clientName: 'WEB', clientVersion: '2.20241023.01.00', hl: 'ko' } }, panelId: 'PAtimeline_view', params: timelineParams(videoId) }),
+    }).finally(() => clearTimeout(timer));
+    if (!res.ok) return null;
+    return parseTimeline(await res.json());
+  } catch {
+    return null;
+  }
+}
+
+/** Long videos without description chapters are usually playlists: wait briefly for YouTube's song list first. */
+const LONG_VIDEO_SEC = 12 * 60;
+const TIMELINE_WAIT_MS = 2500;
 
 const offsetKey = (id: string) => `uw:offset:${id}`;
 const anchorKey = (id: string, chapter?: string) => `uw:anchors:${id}#${chapter ?? ''}`;
@@ -136,6 +159,14 @@ class Panel {
   videoTitle = '';
   chapters: Chapter[] = [];
   chapterIndex = -1;
+  /** YouTube auto-captions for the whole video (from the timeline panel); used to place the lyrics. */
+  transcript: TranscriptSeg[] = [];
+  timeline: Timeline | null = null;
+  /** chapters came from YouTube's song cards: times between/after them belong to no known song */
+  gap = false;
+  /** lyrics placed from auto-captions: anchors (plain lyrics) or syncOffset (synced lyrics) */
+  autoAnchors: Anchor[] = [];
+  asrSynced = false;
   chapterStart = 0;
   basePalette: Palette | null = null;
   video: HTMLVideoElement | null = null;
@@ -453,7 +484,7 @@ class Panel {
     const res = this.state.result;
     if (!res) return;
     this.lineSungNow(lineIndex, at);
-    if (res.kind === 'synced' || this.anchors.length >= 2) this.setSyncMode(false);
+    if (res.kind === 'synced' || this.timed) this.setSyncMode(false);
   }
 
   /** "This line is being sung now" (at video time `at`): add (or move) a sync anchor on it. */
@@ -471,10 +502,10 @@ class Panel {
     chrome.storage?.local.remove(offsetKey(this.videoId)).catch(() => {});
     this.saveAnchors();
     const n = this.anchors.length;
-    this.showToast(res.kind === 'plain'
-      ? (n < 2 ? '1곳 맞췄어요 · 한 곳 더 눌러 주세요' : `${n}곳 맞췄어요 · 노래방처럼 따라가요`)
-      : (n < 2 ? '이 줄에 맞췄어요' : `${n}곳에 맞췄어요`));
     this.render();
+    this.showToast(res.kind === 'plain'
+      ? (!this.timed ? '1곳 맞췄어요 · 한 곳 더 눌러 주세요' : `${n}곳 맞췄어요 · 노래방처럼 따라가요`)
+      : (n < 2 ? '이 줄에 맞췄어요' : `${n}곳에 맞췄어요`));
   }
 
   updateReset() {
@@ -521,13 +552,14 @@ class Panel {
     this.autoConfident = false;
     this.syncOffset = 0;
     this.applyPrior();
+    this.applyAsr();
     this.showToast('싱크를 초기화했어요');
     this.render();
   }
 
   autoEstimate() {
     const res = this.state.result;
-    if (this.manualSync || this.anchors.length || !this.tracker?.ready || this.state.status !== 'synced' || !res) return;
+    if (this.manualSync || this.asrSynced || this.anchors.length || !this.tracker?.ready || this.state.status !== 'synced' || !res) return;
     const onsets = this.tracker.onsets
       .filter((o) => o.t >= this.chapterStart)
       .map((o) => ({ t: o.t - this.chapterStart, s: o.s }));
@@ -745,8 +777,76 @@ class Panel {
     this.videoTitle = title;
     this.channel = channel;
     this.chapters = description ? parseChapters(description) : [];
+    const tl = timelineInPage(this.videoId);
+    if (!this.chapters.length && (this.metaDuration ?? 0) > LONG_VIDEO_SEC) {
+      // a playlist: resolving its title as one song would show a wrong song or "not found" first
+      const got = await Promise.race([tl, sleep(TIMELINE_WAIT_MS).then(() => null)]);
+      if (!this.alive) return;
+      if (got) this.useTimeline(got, false);
+    }
     this.ready = true;
     this.resolveSong();
+    void tl.then((t) => { if (t && this.alive) this.useTimeline(t, true); });
+  }
+
+  /** Song cards become chapters (when the description has none); captions place the lyrics. */
+  useTimeline(t: Timeline, late: boolean) {
+    if (this.timeline === t) return;
+    this.timeline = t;
+    this.transcript = t.transcript;
+    if (!this.chapters.length && t.songs.length >= 2) {
+      const dur = this.currentDuration() ?? this.metaDuration;
+      this.chapters = songChapters(t, dur).map((c) => ({ start: c.start, end: c.end, title: c.artist ? `${c.artist} - ${c.title}` : c.title }));
+      if (late && this.ready && this.chapters.length) { this.ctxKey = ''; this.resolveSong(); return; }
+    }
+    if (late && this.state.result && this.applyAsr()) this.render();
+  }
+
+  /** Video-time range where the current song can be: its chapter (± margin), a gap, or the whole video. */
+  asrWindow(): { start: number; end: number } {
+    const dur = this.currentDuration() ?? this.metaDuration ?? Infinity;
+    const t = this.video?.currentTime ?? 0;
+    if (this.chapterIndex >= 0) {
+      const hit = chapterAt(this.chapters, this.chapterStart);
+      const end = hit?.end ?? dur;
+      return { start: Math.max(0, this.chapterStart - 25), end: Math.min(dur, end + 25) };
+    }
+    if (this.gap) {
+      const prev = [...this.chapters].reverse().find((c) => c.start <= t);
+      const next = this.chapters.find((c) => c.start > t);
+      return { start: prev?.end ?? 0, end: next?.start ?? dur };
+    }
+    return { start: 0, end: dur };
+  }
+
+  /** Manual anchors win; a single manual tap on caption-timed plain lyrics corrects them instead of
+   *  dropping back to untimed lyrics (plain needs two anchors on its own). */
+  effectiveAnchors(): Anchor[] {
+    if (!this.anchors.length) return this.autoAnchors;
+    if (this.state.result?.kind === 'plain' && this.anchors.length < 2 && this.autoAnchors.length) {
+      return this.anchors.reduce((acc, a) => addAnchor(acc, a), this.autoAnchors);
+    }
+    return this.anchors;
+  }
+
+  /** Place the lyrics on YouTube's auto-captions. Manual sync always wins. Returns true when it changed the timing. */
+  applyAsr(result: LyricsResult | null = this.state.result): boolean {
+    const had = this.asrSynced;
+    this.autoAnchors = [];
+    this.asrSynced = false;
+    if (!result || !this.transcript.length || this.manualSync || this.anchors.length) return had;
+    const a = alignToTranscript(result.lines, this.transcript, this.asrWindow());
+    this.root.dataset.asr = a ? `${a.offset != null ? a.offset.toFixed(2) : 'plain'}/${a.matches}/${a.anchors.length}${a.confident ? '' : '?'}` : 'none';
+    if (!a?.confident) return had;
+    this.asrSynced = true;
+    this.autoConfident = true;
+    if (result.kind === 'synced' && a.offset != null) {
+      this.syncOffset = Math.round((a.offset - this.chapterStart) * 100) / 100;
+    } else {
+      this.syncOffset = 0;
+      this.autoAnchors = a.anchors.map((x) => ({ lineIndex: x.lineIndex, videoTime: Math.round((x.videoTime - this.chapterStart) * 100) / 100 }));
+    }
+    return true;
   }
 
   resolveSong(force = false) {
@@ -766,6 +866,22 @@ class Panel {
     } else {
       this.chapterIndex = -1;
       this.chapterStart = 0;
+    }
+    this.gap = !hit && this.chapters.length > 0;
+    if (this.gap) {
+      // between or after YouTube's known songs: never guess a song from the playlist's title
+      if (!force && this.ctxKey === `${this.videoId}#gap`) return;
+      this.ctxKey = `${this.videoId}#gap`;
+      this.reqSeq++;
+      clearTimeout(this.retryTimer);
+      this.lastCtx = ctx;
+      this.candidates = [];
+      this.bestQuery = null;
+      this.titleEl.textContent = this.videoTitle;
+      this.subEl.textContent = this.channel;
+      void this.applyPalette(0);
+      this.dispatch({ type: 'loaded', result: null });
+      return;
     }
     // provisional header from the local parse; replaced by the resolved song
     const guess = buildQueries(ctx);
@@ -801,6 +917,7 @@ class Panel {
           this.subEl.textContent = this.subtitleFor(res.result.artist);
         }
         this.dispatch({ type: 'loaded', result: res.result });
+        if (this.applyAsr()) this.render();
         if (!this.searchEl.hidden) this.showCandidates();
         return;
       }
@@ -968,6 +1085,9 @@ class Panel {
     this.titleEl.textContent = displayTitle(r.title);
     this.subEl.textContent = this.subtitleFor(r.artist);
     this.dispatch({ type: 'choose', result: r });
+    if (this.applyAsr()) this.render();
+    // a pick inside a gap has no stable key (no known song there): keep it for this session only
+    if (this.gap) return;
     const key = overrideKey(this.videoId, this.lastCtx?.chapterTitle);
     chrome.storage?.local.set({ [key]: r }).catch(() => { /* quota */ });
   }
@@ -979,7 +1099,7 @@ class Panel {
     this.lineEls = [];
     this.current = -1;
     // karaoke only when the source is synced or anchors make it synced
-    this.timed = (s.status === 'synced' || s.status === 'plain') && s.result ? timedLines(s.result.kind, s.result.lines, this.anchors) : null;
+    this.timed = (s.status === 'synced' || s.status === 'plain') && s.result ? timedLines(s.result.kind, s.result.lines, this.effectiveAnchors()) : null;
     const synced = !!this.timed;
     this.root.dataset.status = synced ? 'synced' : s.status;
     this.updateReset();
@@ -1043,6 +1163,11 @@ class Panel {
   }
 
   renderNotFound() {
+    if (this.gap) {
+      this.renderMessage(ICON_NOTE, '이 부분은 곡 정보가 없어요', 'YouTube가 알려 준 곡 목록에 없는 구간이에요. 노래 제목으로 검색하면 자막에 맞춰 보여 드려요.',
+        [['직접 검색', () => this.openSearch(true)]]);
+      return;
+    }
     const song = this.chapterIndex >= 0 ? this.lastCtx?.chapterTitle : undefined;
     this.renderMessage(ICON_NOTE, '가사를 찾지 못했어요',
       song ? `‘${song}’의 가사가 아직 등록되지 않았어요. 제목으로 검색해 보세요.` : '노래 제목이나 가수 이름으로 직접 검색해 보세요.',

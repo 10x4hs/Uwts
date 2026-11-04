@@ -1,5 +1,6 @@
 export interface LyricLine { time: number; text: string } // time in seconds
-export interface Chapter { start: number; title: string } // start in seconds
+/** start/end in seconds; `end` only when known (e.g. YouTube's song cards), otherwise the next chapter's start. */
+export interface Chapter { start: number; title: string; end?: number }
 export interface SongQuery { artist: string; title: string; duration?: number }
 export interface LyricsResult {
   kind: 'synced' | 'plain';

@@ -20,4 +20,10 @@ describe('parseChapters', () => {
     expect(chapterAt(c, -1)).toBeNull();
     expect(chapterAt([], 5)).toBeNull();
   });
+  it('chapterAt honors explicit ends (gaps between known songs)', () => {
+    const c = [{ start: 0, title: 'A', end: 50 }, { start: 60, title: 'B', end: 200 }];
+    expect(chapterAt(c, 55)).toBeNull();
+    expect(chapterAt(c, 100)).toEqual({ chapter: c[1], index: 1, end: 200 });
+    expect(chapterAt(c, 250)).toBeNull();
+  });
 });

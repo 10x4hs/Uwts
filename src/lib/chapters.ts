@@ -31,10 +31,12 @@ export function parseChapters(description: string): Chapter[] {
   if (out.length < 2 || out[0].start !== 0) return [];
   return out;
 }
-/** Chapter active at time t (seconds), or null. */
+/** Chapter active at time t (seconds), or null (before the first, or past a chapter's explicit end). */
 export function chapterAt(chapters: Chapter[], t: number): { chapter: Chapter; index: number; end: number | null } | null {
   let idx = -1;
   for (let i = 0; i < chapters.length; i++) { if (chapters[i].start <= t) idx = i; else break; }
   if (idx < 0) return null;
-  return { chapter: chapters[idx], index: idx, end: idx + 1 < chapters.length ? chapters[idx + 1].start : null };
+  const c = chapters[idx];
+  if (c.end != null && t >= c.end) return null;
+  return { chapter: c, index: idx, end: c.end ?? (idx + 1 < chapters.length ? chapters[idx + 1].start : null) };
 }
