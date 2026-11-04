@@ -19,6 +19,9 @@ jobs:
         run: test "v$(node -p "require('./public/manifest.json').version")" = "$GITHUB_REF_NAME"
       - run: npm run pack
       - name: Publish release with the zip
-        run: gh release create "$GITHUB_REF_NAME" release/uwts-lyrics-*.zip --title "Uwts Lyrics $GITHUB_REF_NAME" --notes-file docs/INSTALL.txt
+        run: |
+          # notes = this version's changes (docs/changes/vX.Y.Z.md, optional) + install guide
+          { [ -f "docs/changes/$GITHUB_REF_NAME.md" ] && cat "docs/changes/$GITHUB_REF_NAME.md" && echo; cat docs/RELEASE.md; } > notes.md
+          gh release create "$GITHUB_REF_NAME" release/uwts-lyrics-*.zip --title "Uwts Lyrics $GITHUB_REF_NAME" --notes-file notes.md
         env:
           GH_TOKEN: ${{ github.token }}
