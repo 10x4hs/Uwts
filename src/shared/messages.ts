@@ -9,8 +9,7 @@ export type Request =
   | { type: 'perm:status' }
   | { type: 'perm:open' }
   | { type: 'update:status' }
-  | { type: 'lyrics:words'; artist: string; title: string; duration?: number; lines: LyricLine[] }
-  | { type: 'lyrics:translate'; lines: string[] };
+  | { type: 'lyrics:words'; artist: string; title: string; duration?: number; lines: LyricLine[] };
 
 export type Response<R extends Request> =
   R extends { type: 'lyrics:get' } ? { ok: true; result: LyricsResult | null } | { ok: false; error: string } :
@@ -19,7 +18,6 @@ export type Response<R extends Request> =
   R extends { type: 'perm:status' } ? { ok: true; granted: boolean } :
   R extends { type: 'perm:open' } ? { ok: true } :
   R extends { type: 'lyrics:words' } ? { ok: true; lines: LyricLine[] | null } | { ok: false; error: string } :
-  R extends { type: 'lyrics:translate' } ? { ok: true; lang: string; lines: (string | null)[] | null } | { ok: false; error: string } :
   R extends { type: 'update:status' } ? { ok: true; current: string; latest?: string; url?: string } :
   R extends { type: 'lyrics:resolve' } ? { ok: true; result: LyricsResult | null; candidates: LyricsResult[]; query: SongQuery } | { ok: false; error: string } :
   R extends { type: 'video:meta' } ? { ok: true; title: string; channel: string; description?: string; duration?: number } | { ok: false; error: string } : never;

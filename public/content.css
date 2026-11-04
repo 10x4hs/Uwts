@@ -277,12 +277,3 @@
   color: rgba(255,255,255,.6); -webkit-text-fill-color: currentColor; font-variant-numeric: tabular-nums;
 }
 
-/* ---------- Korean translation under each line ---------- */
-.uw-tr {
-  display: block; margin-top: 6px;
-  font-size: 15px; font-weight: 500; line-height: 1.35; letter-spacing: 0;
-  color: rgba(255,255,255,.5); -webkit-text-fill-color: currentColor;
-}
-.uw-current .uw-tr { color: rgba(255,255,255,.8); }
-.uw-tr-btn[aria-pressed='false'] { opacity: .55; }
-.uw-tr-btn[hidden] { display: none; }
