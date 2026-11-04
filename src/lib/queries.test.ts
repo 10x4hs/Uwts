@@ -57,3 +57,10 @@ describe('buildQueries', () => {
     expect(new Set(q.map((x) => x.toLowerCase())).size).toBe(q.length);
   });
 });
+
+describe('chapter titles without artist', () => {
+  it('searches the bare song title first (uploader is not the artist)', () => {
+    const plan = buildQueries({ videoId: 'x', videoTitle: 'Playlist 리센느 신곡 PULSE 앨범 전곡 듣기 with', channel: '김지투', chapterTitle: '백화요란 (Inside Out)' });
+    expect(plan.queries[0]).toBe('백화요란');
+  });
+});

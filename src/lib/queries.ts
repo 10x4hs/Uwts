@@ -91,6 +91,12 @@ export function buildQueries(ctx: ResolveContext, max = 6): QueryPlan {
     if (v && !out.some((o) => o.toLowerCase() === v.toLowerCase())) out.push(v);
   };
   const [a0, ...aRest] = artists;
+  // Multi-song videos whose chapter titles carry no artist: the only "artist" we have is the
+  // uploader (a playlist channel), so search by the song title alone first; the video title
+  // (e.g. "리센느 신곡 PULSE 앨범") still confirms the artist during scoring.
+  const channelIsArtist = /official|\btopic\b|vevo|오피셜|공식/i.test(ctx.channel)
+    || (!!channel && ctx.videoTitle.toLowerCase().includes(channel.toLowerCase()));
+  if (ctx.chapterTitle && !hasArtistInTitle && !channelIsArtist) add(bare);
   add(`${a0 ?? ''} ${bare}`);
   for (const a of aRest.slice(0, 2)) add(`${a} ${bare}`);
   for (const t of titles.slice(1)) add(`${a0 ?? ''} ${t}`);

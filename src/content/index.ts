@@ -616,6 +616,12 @@ class Panel {
 
   metaDuration: number | undefined;
 
+  /** Header subtitle: the resolved artist (not the uploader), plus "n / m곡" in multi-song videos. */
+  subtitleFor(artist: string): string {
+    const a = displayArtist(artist);
+    return this.chapterIndex >= 0 ? `${a} · ${this.chapterIndex + 1} / ${this.chapters.length}곡` : a;
+  }
+
   // ----- song identification -----
   /** Per-navigation: oEmbed title/channel by videoId, then chapters only from a DOM that matches. */
   async identify() {
@@ -715,7 +721,7 @@ class Panel {
         this.applyPrior(res.result);
         if (res.result) {
           this.titleEl.textContent = displayTitle(res.result.title);
-          if (this.chapterIndex < 0) this.subEl.textContent = displayArtist(res.result.artist);
+          this.subEl.textContent = this.subtitleFor(res.result.artist);
         }
         this.dispatch({ type: 'loaded', result: res.result });
         if (!this.searchEl.hidden) this.showCandidates();
@@ -883,7 +889,7 @@ class Panel {
     this.autoConfident = false;
     this.applyPrior(r);
     this.titleEl.textContent = displayTitle(r.title);
-    if (this.chapterIndex < 0) this.subEl.textContent = displayArtist(r.artist);
+    this.subEl.textContent = this.subtitleFor(r.artist);
     this.dispatch({ type: 'choose', result: r });
     const key = overrideKey(this.videoId, this.lastCtx?.chapterTitle);
     chrome.storage?.local.set({ [key]: r }).catch(() => { /* quota */ });
