@@ -929,6 +929,23 @@ class Panel {
     void this.load(ctx, { artist: guess.artist, title: guess.title, duration: ctx.chapterDuration ?? ctx.videoDuration }, force);
   }
 
+  /**
+   * Line-timed lyrics show first; a word-timed version of the same lyrics (slow third-party
+   * lookup) replaces them when it arrives, like YouLy+/Better Lyrics. Skipped once the user has
+   * synced by hand (their anchors point at line indices of the current lyrics).
+   */
+  async upgradeWords(result: LyricsResult | null, seq: number) {
+    if (!result || result.kind !== 'synced' || result.lines.some((l) => l.words?.length)) return;
+    const d = (result as Cand).duration;
+    const res = await send({ type: 'lyrics:words', artist: result.artist, title: result.title, duration: d,
+      lines: result.lines.map((l) => ({ time: l.time, text: l.text })) }).catch(() => null);
+    if (!res?.ok || !res.lines || seq !== this.reqSeq || !this.alive) return;
+    if (this.state.result !== result || this.manualSync || this.anchors.length) return;
+    this.dispatch({ type: 'loaded', result: { ...result, lines: res.lines } });
+    this.applyAsr();
+    this.refresh();
+  }
+
   async load(ctx: ResolveContext, guess: SongQuery, fresh = false) {
     const seq = ++this.reqSeq;
     clearTimeout(this.retryTimer);
@@ -953,6 +970,7 @@ class Panel {
         this.dispatch({ type: 'loaded', result: res.result });
         if (this.applyAsr()) this.render();
         if (!this.searchEl.hidden) this.showCandidates();
+        void this.upgradeWords(res.result, seq);
         return;
       }
       error = res.error;
@@ -1120,6 +1138,7 @@ class Panel {
     this.subEl.textContent = this.subtitleFor(r.artist);
     this.dispatch({ type: 'choose', result: r });
     if (this.applyAsr()) this.render();
+    void this.upgradeWords(this.state.result, this.reqSeq);
     // a pick inside a gap has no stable key (no known song there): keep it for this session only
     if (this.gap) return;
     const key = overrideKey(this.videoId, this.lastCtx?.chapterTitle);

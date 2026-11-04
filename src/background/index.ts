@@ -1,6 +1,7 @@
 import { checkUpdate, reloadIfFilesChanged } from './update';
 import { EXTRA_ORIGINS, type Request, type SearchHit } from '../shared/messages';
 import { groupSearch, rankSearch, searchRelevance } from '../lib/score';
+import { wordSyncFor } from './wordsync';
 import { krEnabled, krLyrics, searchKr } from './kr';
 import type { LyricsResult, Palette, SongQuery } from '../shared/types';
 import { fetchLyrics } from './lrclib';
@@ -158,6 +159,8 @@ async function handle(req: Request): Promise<unknown> {
     }
     case 'perm:status':
       return { ok: true, granted: await chrome.permissions.contains({ origins: EXTRA_ORIGINS }) };
+    case 'lyrics:words':
+      try { return { ok: true, lines: await wordSyncFor(req, req.lines) }; } catch (e) { return { ok: false, error: String(e) }; }
     case 'update:status':
       void reloadIfFilesChanged();
       return { ok: true, ...(await checkUpdate()) };

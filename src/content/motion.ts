@@ -54,7 +54,7 @@ const SUNG_MIN = 0.8;
 /** How long line `line` is probably sung for, given its slot `span` and the song pace. */
 export function sungSeconds(line: LyricLine, span: number, pace?: number): number {
   const w = line.words;
-  if (w?.length) return Math.min(span, Math.max(0, w[w.length - 1].t + w[w.length - 1].d - line.time));
+  if (w?.length) return Math.min(span, Math.max(0, ...w.map((x) => x.t + x.d - line.time)));
   if (!pace) return span;
   return Math.min(span, Math.max(SUNG_MIN, countUnits(line.text) * pace * SUNG_SCALE + SUNG_PAD));
 }
