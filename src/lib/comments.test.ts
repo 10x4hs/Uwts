@@ -58,4 +58,15 @@ describe('comment tracklists', () => {
     expect(list[1].title).toBe('Wham! - Last Christmas');
     expect(pickTracklist([{ id: 'f', text: fan, creator: false, pinned: false }])).toHaveLength(6);
   });
+  it('reads times at the end of the line and skips a range line', () => {
+    const text = '구독과 좋아요는 저에게 큰 힘이 됩니다\n\n🔀 0:01 ———————— 1:08:00\n\nMariah Carey - All I Want for Christmas Is You 0:01\n\nAriana Grande - Santa Tell Me 4:02\n\nAva Max - Christmas Without You 7:27\n\nMichael Buble - Christmas 1:04:50';
+    expect(parseTracklist(text, 4080)).toEqual([
+      { start: 0, title: 'Mariah Carey - All I Want for Christmas Is You' },
+      { start: 242, title: 'Ariana Grande - Santa Tell Me' },
+      { start: 447, title: 'Ava Max - Christmas Without You' },
+      { start: 3890, title: 'Michael Buble - Christmas' },
+    ]);
+    // no duration known: the range line still can't win over the real list
+    expect(parseTracklist(text)).toHaveLength(4);
+  });
 });

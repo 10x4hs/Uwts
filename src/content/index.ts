@@ -137,6 +137,16 @@ type Cand = LyricsResult & { duration?: number; match?: 'exact' | 'partial' };
 const SEARCH_DEBOUNCE_MS = 300;
 const formatDuration = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const clock = (sec: number) => {
+  const s = Math.max(0, Math.floor(sec));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${r}` : `${m}:${r}`;
+};
+/** "Artist - Title" chapter names split for the song list; anything else is all title. */
+function splitChapter(title: string): { title: string; artist: string } {
+  const m = title.match(/^(.+?)\s+[-–—]\s+(.+)$/);
+  return m ? { artist: m[1].trim(), title: m[2].trim() } : { title, artist: '' };
+}
 
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -160,6 +170,7 @@ const ICON_SEARCH = 'M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM15.5 15.5 2
 const ICON_CHEVRON = 'M6 15l6-6 6 6';
 const ICON_CLOUD_OFF = 'M3 3l18 18M8.5 8.6A5.5 5.5 0 0 0 7 19h9.5M19.6 16.4A4 4 0 0 0 17 9h-.6A6 6 0 0 0 10 5.3';
 const ICON_NOTE = 'M9 18V6l10-2v12M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3ZM19 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3Z';
+const ICON_LIST = 'M4 6h11M4 12h11M4 18h7M18 15V6l3 1.5M18 15a2 2 0 1 1-2-2 2 2 0 0 1 2 2Z';
 const ICON_REFRESH = 'M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6';
 const UPDATED_ERROR = 'extension-updated';
 /** false once the extension is reloaded/removed under an open tab (orphaned content script). */
@@ -175,6 +186,9 @@ class Panel {
   titleEl = el('div', 'uw-title');
   subEl = el('div', 'uw-sub');
   body = el('div', 'uw-body');
+  /** the playlist's song list, opened over the lyrics */
+  tracksEl = el('div', 'uw-tracks');
+  tracksBtn = el('button', 'uw-btn uw-chip uw-tracks-btn');
   lyricsEl = el('div', 'uw-lyrics');
   collapseBtn = el('button', 'uw-btn uw-chip uw-collapse-btn');
   lineEls: HTMLElement[] = [];
@@ -285,7 +299,20 @@ class Panel {
     this.collapseBtn.type = 'button';
     this.collapseBtn.append(icon(ICON_CHEVRON));
     this.collapseBtn.addEventListener('click', () => this.setCollapsed(!this.root.classList.contains('uw-collapsed'), true));
-    header.append(this.thumb, meta, searchBtn, this.collapseBtn);
+    this.tracksBtn.type = 'button';
+    this.tracksBtn.hidden = true;
+    this.tracksBtn.setAttribute('aria-label', '곡 목록');
+    this.tracksBtn.setAttribute('aria-pressed', 'false');
+    this.tracksBtn.append(icon(ICON_LIST));
+    this.tracksBtn.addEventListener('click', () => (this.tracksEl.hidden ? this.openTracks() : this.closeTracks()));
+    this.subEl.addEventListener('click', () => { if (this.subEl.classList.contains('uw-sub-link')) this.openTracks(); });
+    this.subEl.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && this.subEl.classList.contains('uw-sub-link')) { e.preventDefault(); this.openTracks(); }
+    });
+    this.tracksEl.hidden = true;
+    this.tracksEl.setAttribute('role', 'list');
+    this.tracksEl.setAttribute('aria-label', '곡 목록');
+    header.append(this.thumb, meta, this.tracksBtn, searchBtn, this.collapseBtn);
     const wave = el('div', 'uw-wave');
     for (let i = 0; i < WAVE_BARS; i++) { const b = el('span'); wave.append(b); this.waveBars.push(b); }
     this.breakEl.setAttribute('aria-hidden', 'true');
@@ -313,7 +340,7 @@ class Panel {
     this.introEl.hidden = true;
     this.toastEl.setAttribute('role', 'status');
     this.buildSearch();
-    this.body.append(this.searchEl, this.lyricsEl);
+    this.body.append(this.searchEl, this.tracksEl, this.lyricsEl);
     const permBar = el('div', 'uw-perm');
     permBar.hidden = true;
     const permBtn = el('button', 'uw-btn uw-perm-btn', '더 많은 곡 찾기: 가사 소스 권한 허용');
@@ -344,7 +371,11 @@ class Panel {
         if (t.closest('input, textarea, [contenteditable="true"]')) e.stopPropagation();
       });
     }
-    this.root.addEventListener('keydown', (e) => { if (e.key === 'Escape' && this.syncMode) this.setSyncMode(false); });
+    this.root.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      if (!this.tracksEl.hidden) this.closeTracks();
+      else if (this.syncMode) this.setSyncMode(false);
+    });
     this.setCollapsed(collapsedPref, false);
     let pressTimer = 0;
     let longPressed = false; // also set after a sync-mode tap so the following click doesn't seek
@@ -576,6 +607,71 @@ class Panel {
     this.current = -2; // force setCurrent to re-apply
     this.tick();
     this.applyFill(true);
+  }
+
+  /** The song-list button and the clickable "3 / 52곡" show only for videos with a song list. */
+  updateTracksBtn() {
+    const has = this.chapters.length >= 2;
+    this.tracksBtn.hidden = !has;
+    this.subEl.classList.toggle('uw-sub-link', has);
+    if (has) { this.subEl.tabIndex = 0; this.subEl.setAttribute('role', 'button'); this.subEl.title = '곡 목록 열기'; }
+    else { this.subEl.removeAttribute('tabindex'); this.subEl.removeAttribute('role'); this.subEl.removeAttribute('title'); }
+    if (!has) this.closeTracks();
+  }
+
+  openTracks() {
+    if (this.chapters.length < 2) return;
+    if (!this.searchEl.hidden) this.closeSearch();
+    if (this.root.classList.contains('uw-collapsed')) this.setCollapsed(false, false);
+    const t = this.video?.currentTime ?? 0;
+    const now = chapterAt(this.chapters, t)?.index ?? -1;
+    const rows = this.chapters.map((c, i) => {
+      const { title, artist } = splitChapter(c.title);
+      const b = el('button', `uw-track${i === now ? ' uw-track-on' : ''}`);
+      b.type = 'button';
+      b.setAttribute('role', 'listitem');
+      const no = el('span', 'uw-track-no');
+      no.append(el('span', 'uw-track-num', String(i + 1)));
+      const eq = el('span', 'uw-track-eq');
+      eq.setAttribute('aria-hidden', 'true');
+      eq.append(el('i'), el('i'), el('i'));
+      no.append(eq);
+      const txt = el('span', 'uw-track-txt');
+      txt.append(el('b', '', title));
+      if (artist) txt.append(el('span', '', artist));
+      b.append(no, txt, el('span', 'uw-track-at', clock(c.start)));
+      b.setAttribute('aria-label', `${i + 1}번 ${title}${artist ? `, ${artist}` : ''}, ${clock(c.start)}부터`);
+      if (i === now) b.setAttribute('aria-current', 'true');
+      b.addEventListener('click', () => this.pickTrack(i));
+      return b;
+    });
+    this.tracksEl.replaceChildren(...rows);
+    this.tracksEl.hidden = false;
+    this.root.classList.add('uw-listing');
+    this.tracksBtn.setAttribute('aria-pressed', 'true');
+    const cur = rows[Math.max(0, now)];
+    this.body.scrollTop = Math.max(0, cur.offsetTop - this.body.clientHeight / 2 + cur.offsetHeight / 2);
+    (now >= 0 ? cur : rows[0]).focus({ preventScroll: true });
+  }
+
+  closeTracks() {
+    if (this.tracksEl.hidden) return;
+    this.tracksEl.hidden = true;
+    this.tracksEl.replaceChildren();
+    this.root.classList.remove('uw-listing');
+    this.tracksBtn.setAttribute('aria-pressed', 'false');
+    this.body.scrollTop = 0;
+    if (this.timed) { this.follow(); this.tick(); }
+  }
+
+  /** Jump the video to a song from the list; its lyrics load through the normal chapter change. */
+  pickTrack(i: number) {
+    const c = this.chapters[i];
+    this.closeTracks();
+    if (!c || !this.video) return;
+    this.video.currentTime = c.start + 0.05;
+    this.showToast(`${clock(c.start)}로 이동했어요`);
+    this.tick();
   }
 
   showToast(text: string) {
@@ -841,7 +937,7 @@ class Panel {
 
   onUserScroll(e: WheelEvent) {
     // while searching the wheel scrolls the results list natively
-    if (!this.timed || !this.searchEl.hidden) return;
+    if (!this.timed || !this.searchEl.hidden || !this.tracksEl.hidden) return;
     e.preventDefault();
     const { min, max } = this.scrollBounds();
     const over = this.manualOffset > max ? this.manualOffset - max : this.manualOffset < min ? min - this.manualOffset : 0;
@@ -1042,6 +1138,7 @@ class Panel {
 
   resolveSong(force = false) {
     if (!this.alive || !this.ready) return;
+    this.updateTracksBtn();
     const t = this.video?.currentTime ?? 0;
     const dur = this.currentDuration() ?? this.metaDuration;
     const ctx: ResolveContext = { videoId: this.videoId, videoTitle: this.videoTitle, channel: this.channel, videoDuration: dur ? Math.round(dur) : undefined };
@@ -1208,6 +1305,7 @@ class Panel {
   }
 
   openSearch(focus: boolean) {
+    this.closeTracks();
     const q = this.bestQuery ?? this.state.query;
     const wasHidden = this.searchEl.hidden;
     this.searchEl.hidden = false;

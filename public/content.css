@@ -277,3 +277,33 @@
   color: rgba(255,255,255,.6); -webkit-text-fill-color: currentColor; font-variant-numeric: tabular-nums;
 }
 
+
+/* ---------- playlist song list (opened over the lyrics) ---------- */
+.uw-tracks[hidden], .uw-tracks-btn[hidden] { display: none; }
+.uw-listing .uw-lyrics, .uw-listing .uw-sync { display: none; }
+.uw-listing .uw-body { overflow-y: auto; scrollbar-width: none; overscroll-behavior: contain; mask-image: none; -webkit-mask-image: none; }
+.uw-listing .uw-body::-webkit-scrollbar { display: none; }
+.uw-tracks { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 16px; margin: 0 -12px; }
+.uw-track {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  min-height: 52px; padding: 6px 10px; border: 0; border-radius: 12px; background: none; color: #fff;
+  font-family: inherit; text-align: left; cursor: pointer;
+}
+.uw-track:hover { background: rgba(255,255,255,.08); }
+.uw-track:focus-visible { outline: 2px solid var(--uw-glow); outline-offset: -2px; }
+.uw-track-on { background: rgba(255,255,255,.15); }
+.uw-track-no { font: 500 12px/1 ui-monospace, 'SF Mono', Menlo, monospace; color: rgba(255,255,255,.6); text-align: right; font-variant-numeric: tabular-nums; }
+.uw-track-eq { display: none; justify-content: flex-end; align-items: flex-end; gap: 2px; height: 12px; }
+.uw-track-eq i { width: 3px; height: 4px; border-radius: 1px; background: #fff; animation: uw-eq 1s ease-in-out infinite; }
+.uw-track-eq i:nth-child(2) { animation-delay: -.3s; } .uw-track-eq i:nth-child(3) { animation-delay: -.6s; }
+.uw-track-on .uw-track-eq { display: flex; } .uw-track-on .uw-track-num { display: none; }
+@keyframes uw-eq { 0%, 100% { height: 4px; } 50% { height: 12px; } }
+.uw-track-txt { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.uw-track-txt b { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.uw-track-txt span { font-size: 12px; color: rgba(255,255,255,.62); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.uw-track-at { font: 500 12px/1 ui-monospace, 'SF Mono', Menlo, monospace; color: rgba(255,255,255,.62); font-variant-numeric: tabular-nums; }
+.uw-sub-link { cursor: pointer; }
+.uw-sub-link:hover { color: #fff; }
+.uw-sub-link:focus-visible { outline: 2px solid var(--uw-glow); outline-offset: 2px; border-radius: 4px; }
+.uw-tracks-btn[aria-pressed='true'] { background: #fff; color: #222; }
+@media (prefers-reduced-motion: reduce) { .uw-track-eq i { animation: none; height: 8px; } }

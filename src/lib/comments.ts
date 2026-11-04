@@ -55,23 +55,46 @@ export function parseComments(json: unknown): CommentText[] {
   }
 }
 
-const LINE = /^\s*(?:\d+[.)]\s*)?\[?\(?((?:\d{1,2}:)?\d{1,2}:\d{2})\)?\]?\s*[-–—|:.~]?\s*(.+?)\s*$/;
+const TIME = '((?:\\d{1,2}:)?\\d{1,2}:\\d{2})';
+const LEAD = new RegExp(`^\\s*(?:\\d+[.)]\\s*)?\\[?\\(?${TIME}\\)?\\]?\\s*[-–—|:.~]?\\s*(.+?)\\s*$`);
+const TRAIL = new RegExp(`^\\s*(?:\\d+[.)]\\s*)?(.+?)\\s*[-–—|:~]?\\s*\\[?\\(?${TIME}\\)?\\]?\\s*$`);
 const toSec = (s: string) => s.split(':').map(Number).reduce((a, n) => a * 60 + n, 0);
+const cleanTitle = (s: string) => s.replace(/^[\s\-–—|:.]+|[\s\-–—|:]+$/g, '').trim();
+const TIME_ONLY = /\d{1,2}:\d{2}/;
 
-/** "00:03:59 Wham! - Last Christmas" lines from a comment. Lines must start with the time and
- *  keep going forward; anything else ("재생 시간 :: 02:52:46", a time out of order) is skipped. */
-export function parseTracklist(text: string, duration?: number): Chapter[] {
-  const out: Chapter[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    const m = line.match(LINE);
-    if (!m) continue;
-    const start = toSec(m[1]);
-    const title = m[2].replace(/^[\s\-–—|:.]+|[\s\-–—|:]+$/g, '').trim();
-    if (!title || /^\d+(:\d{2})*$/.test(title)) continue;
-    if (duration && start >= duration) continue;
-    if (out.length && start <= out[out.length - 1].start) continue;
-    out.push({ start, title });
+/** Longest run of entries whose times keep going forward (drops "total 1:08:00"-style lines). */
+function increasing(list: Chapter[]): Chapter[] {
+  const len = list.map(() => 1);
+  const prev = list.map(() => -1);
+  let best = -1;
+  for (let i = 0; i < list.length; i++) {
+    for (let j = 0; j < i; j++) {
+      if (list[j].start < list[i].start && len[j] + 1 > len[i]) { len[i] = len[j] + 1; prev[i] = j; }
+    }
+    if (best < 0 || len[i] > len[best]) best = i;
   }
+  const out: Chapter[] = [];
+  for (let k = best; k >= 0; k = prev[k]) out.unshift(list[k]);
+  return out;
+}
+
+/** Tracklist lines from a comment: "00:03:59 Wham! - Last Christmas" or "Wham! - Last Christmas 3:59".
+ *  Times must keep going forward; stray lines ("재생 시간 :: 02:52:46", "0:01 ——— 1:08:00") are dropped. */
+export function parseTracklist(text: string, duration?: number): Chapter[] {
+  const found: Chapter[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(LEAD);
+    const n = m ? null : line.match(TRAIL);
+    const time = m ? m[1] : n?.[2];
+    const raw = m ? m[2] : n?.[1];
+    if (!time || raw === undefined) continue;
+    const title = cleanTitle(raw);
+    if (!title || TIME_ONLY.test(title) || !/\p{L}/u.test(title)) continue;
+    const start = toSec(time);
+    if (duration && start >= duration) continue;
+    found.push({ start, title });
+  }
+  const out = increasing(found);
   if (out.length < 3 || out[0].start > 60) return [];
   if (out[0].start <= 15) out[0] = { ...out[0], start: 0 };
   return out;
