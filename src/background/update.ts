@@ -8,6 +8,7 @@
 export const REPO = '10x4hs/Uwts';
 const KEY = 'uw:update';
 const CHECK_MS = 6 * 3600 * 1000;
+const RETRY_MS = 10 * 60 * 1000; // a failed check (offline, signed out) is retried soon, not in 6 h
 
 export interface UpdateInfo { current: string; latest?: string; url?: string }
 
@@ -30,12 +31,14 @@ export async function checkUpdate(): Promise<UpdateInfo> {
   const current = chrome.runtime.getManifest().version;
   const got = (await chrome.storage.local.get(KEY))[KEY] as { at: number; latest?: string } | undefined;
   let latest = got?.latest;
-  if (!got || Date.now() - got.at > CHECK_MS) {
+  if (!got || Date.now() - got.at > (got.latest ? CHECK_MS : RETRY_MS)) {
     try {
       const res = await fetch(`https://github.com/${REPO}/releases/latest`, { credentials: 'include', cache: 'no-store' });
       latest = (res.ok && tagFromUrl(res.url)) || undefined;
-    } catch { /* offline: try again next time */ }
-    await chrome.storage.local.set({ [KEY]: { at: Date.now(), latest } });
+    } catch { latest = undefined; }
+    // keep the last known version if this check failed; only the timestamp decides when to retry
+    await chrome.storage.local.set({ [KEY]: { at: Date.now(), latest: latest ?? got?.latest } });
+    latest = latest ?? got?.latest;
   }
   if (!latest || !isNewer(latest, current)) return { current };
   return { current, latest, url: `https://github.com/${REPO}/releases/download/v${latest}/uwts-lyrics-${latest}.zip` };
