@@ -104,6 +104,7 @@
 @keyframes uw-fill { from { background-size: 0% 100%; } to { background-size: calc(100% + .75em) 100%; } }
 /* manual scroll: follow the finger immediately, no blur */
 .uw-manual .uw-line { filter: none; transition: transform 0s, color .6s ease; }
+.uw-manual.uw-settle .uw-line { transition: transform .4s cubic-bezier(.2,.9,.25,1), color .6s ease; }
 /* plain lyrics: simple scroll, no fill, no blur */
 .uw-panel[data-status='plain'] .uw-body { overflow-y: auto; scrollbar-width: none; }
 .uw-panel[data-status='plain'] .uw-lyrics { padding: 140px 0; }

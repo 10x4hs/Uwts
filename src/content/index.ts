@@ -76,6 +76,12 @@ const offsetKey = (id: string) => `uw:offset:${id}`;
 const anchorKey = (id: string, chapter?: string) => `uw:anchors:${id}#${chapter ?? ''}`;
 const LONG_PRESS_MS = 550;
 /** People tap a moment after they hear a line start; anchor that much earlier. */
+const RESUME_IDLE_MS = 12000;
+const RESUME_AFTER_LEAVE_MS = 1500;
+const SETTLE_MS = 160;
+const EDGE_STRETCH = 90;
+/** Wheel resistance past an edge: 1 at the edge, fading towards 0 at EDGE_STRETCH. */
+const rubberFactor = (over: number) => Math.max(0.05, 0.45 * (1 - over / EDGE_STRETCH));
 const TAP_REACTION_SEC = 0.2;
 const ESTIMATE_MS = 15000;
 const MIN_COVERAGE = 20;
@@ -324,9 +330,15 @@ class Panel {
       // keyboard (Enter/Space) in sync mode
       if (this.syncMode) { if (line?.dataset.index && this.video) this.tapLine(Number(line.dataset.index), this.video.currentTime); return; }
       const t = line?.dataset.time;
-      if (t != null && t !== '' && this.video && Number(t) >= 0) this.video.currentTime = Number(t) + this.chapterStart + this.syncOffset;
+      if (t != null && t !== '' && this.video && Number(t) >= 0) {
+        this.video.currentTime = Number(t) + this.chapterStart + this.syncOffset;
+        this.resetManualScroll(); // jumping to a line ends browsing: follow from there
+      }
     });
     this.body.addEventListener('wheel', (e) => this.onUserScroll(e), { passive: false });
+    // browsing other lines: resume following shortly after the pointer leaves the lyrics
+    this.root.addEventListener('pointerleave', () => { if (this.browsing && !this.syncMode) this.scheduleResume(RESUME_AFTER_LEAVE_MS); });
+    this.root.addEventListener('pointerenter', () => { if (this.browsing && !this.syncMode) this.scheduleResume(RESUME_IDLE_MS); });
     const onVis = () => this.updatePaused();
     document.addEventListener('visibilitychange', onVis);
     this.disposers.push(() => document.removeEventListener('visibilitychange', onVis));
@@ -502,7 +514,7 @@ class Panel {
     this.syncHint.hidden = !on;
     // while syncing the lyrics hold still, so the line the user is about to tap doesn't move away
     this.syncHold = on ? Math.max(0, this.current) : -1;
-    if (!on) { this.resetManualScroll(); this.follow(); }
+    if (!on) { this.browsing = false; this.resetManualScroll(); this.follow(); }
   }
 
   /** Line index the lyrics are frozen on during sync mode (-1 = follow the song). */
@@ -510,6 +522,7 @@ class Panel {
 
   /** Scroll the active line into place, or keep the frozen position while syncing. */
   follow() {
+    if (this.browsing) return; // the user is reading other lines: don't move them
     const i = this.syncMode && this.syncHold >= 0 ? this.syncHold : this.current;
     this.position(this.lineEls[i] ?? this.lineEls[0]);
   }
@@ -730,28 +743,63 @@ class Panel {
     this.lyricsEl.style.setProperty('--uw-y', `${y}px`);
   }
 
+  /** The user scrolled the lyrics by hand: auto-follow pauses until they're done. */
+  browsing = false;
+  settleTimer = 0;
+
+  /** Allowed range of the manual offset: the first line no lower and the last line no higher than the anchor. */
+  scrollBounds(): { min: number; max: number } {
+    const first = this.lineEls[0], last = this.lineEls[this.lineEls.length - 1];
+    if (!first || !last) return { min: 0, max: 0 };
+    const y = parseFloat(this.lyricsEl.style.getPropertyValue('--uw-y')) || 0;
+    return { min: scrollOffset(last.offsetTop, this.body.clientHeight) - y, max: scrollOffset(first.offsetTop, this.body.clientHeight) - y };
+  }
+
   onUserScroll(e: WheelEvent) {
     // while searching the wheel scrolls the results list natively
     if (!this.timed || !this.searchEl.hidden) return;
     e.preventDefault();
-    this.manualOffset -= e.deltaY;
-    const max = this.lyricsEl.scrollHeight;
-    this.manualOffset = Math.max(-max, Math.min(max, this.manualOffset));
+    const { min, max } = this.scrollBounds();
+    const over = this.manualOffset > max ? this.manualOffset - max : this.manualOffset < min ? min - this.manualOffset : 0;
+    const outward = (this.manualOffset >= max && e.deltaY < 0) || (this.manualOffset <= min && e.deltaY > 0);
+    // past the first/last line: resist (rubber band) instead of a dead stop, then spring back
+    const k = outward ? rubberFactor(over) : 1;
+    this.manualOffset = Math.max(min - EDGE_STRETCH, Math.min(max + EDGE_STRETCH, this.manualOffset - e.deltaY * k));
     this.lyricsEl.style.setProperty('--uw-m', `${this.manualOffset}px`);
+    this.browsing = true;
     this.root.classList.add('uw-manual');
-    clearTimeout(this.manualTimer);
-    this.manualTimer = window.setTimeout(() => {
-      // in sync mode keep where the user scrolled to (they are looking for the sung line)
-      if (this.syncMode) this.root.classList.remove('uw-manual');
-      else this.resetManualScroll();
-    }, 3000);
+    this.root.classList.remove('uw-settle');
+    clearTimeout(this.settleTimer);
+    this.settleTimer = window.setTimeout(() => this.settleEdges(), SETTLE_MS);
+    if (!this.syncMode) this.scheduleResume(RESUME_IDLE_MS);
   }
 
+  /** Spring back inside the first/last line after an overscroll. */
+  settleEdges() {
+    const { min, max } = this.scrollBounds();
+    const clamped = Math.max(min, Math.min(max, this.manualOffset));
+    if (clamped === this.manualOffset) return;
+    this.manualOffset = clamped;
+    this.root.classList.add('uw-settle');
+    this.lyricsEl.style.setProperty('--uw-m', `${clamped}px`);
+    window.setTimeout(() => this.root.classList.remove('uw-settle'), 450);
+  }
+
+  scheduleResume(ms: number) {
+    clearTimeout(this.manualTimer);
+    this.manualTimer = window.setTimeout(() => this.resetManualScroll(), ms);
+  }
+
+  /** Stop browsing and follow the song again (in sync mode the lyrics stay frozen). */
   resetManualScroll() {
     clearTimeout(this.manualTimer);
+    clearTimeout(this.settleTimer);
+    const was = this.browsing || this.manualOffset !== 0;
+    this.browsing = false;
     this.manualOffset = 0;
     this.lyricsEl.style.setProperty('--uw-m', '0px');
-    this.root.classList.remove('uw-manual');
+    this.root.classList.remove('uw-manual', 'uw-settle');
+    if (was) this.follow();
   }
 
   burst(line: HTMLElement) {
