@@ -69,6 +69,7 @@ export async function resolveFresh(ctx: ResolveContext, deps: ResolveDeps = defa
   const limit = limiter(CONCURRENCY);
   let failures = 0;
   let tasks = 0;
+  let succeeded = 0;
 
   return new Promise<Resolved>((resolve) => {
     let done = false;
@@ -82,12 +83,13 @@ export async function resolveFresh(ctx: ResolveContext, deps: ResolveDeps = defa
       const best = candidates[0] ?? null;
       console.debug(`[uwts] resolve ${ctx.videoId} ${why} in ${Math.round(deps.now() - t0)}ms`,
         best ? `${best.artist} - ${best.title} (${best.kind}, ${best.score})` : 'null', plan.queries);
-      if (!best && (failures > 0 || why === 'deadline')) {
-        // a source failed or timed out (LRCLIB is often 503-overloaded): report an error so the
-        // panel retries, instead of caching a possibly-wrong "not found"
+      if (!best && succeeded === 0 && (failures > 0 || why === 'deadline')) {
+        // no source answered at all (offline, LRCLIB 503-overloaded and NetEase down): report an
+        // error so the panel retries, instead of caching a possibly-wrong "not found"
         resolve(Promise.reject(new Error('all lyric sources failed')) as never);
         return;
       }
+      // some sources answered with nothing: "not found", kept only briefly (partial) when others failed
       resolve({ result: best, candidates, query, partial: why === 'deadline' || failures > 0 });
     };
     const timer = setTimeout(() => finish('deadline'), deps.deadlineMs);
@@ -107,7 +109,7 @@ export async function resolveFresh(ctx: ResolveContext, deps: ResolveDeps = defa
     const jobs: Promise<unknown>[] = [];
     const job = (fn: () => Promise<void>) => {
       tasks++;
-      jobs.push(limit(async () => { if (!done) await fn(); }).catch(() => { failures++; }));
+      jobs.push(limit(async () => { if (!done) { await fn(); succeeded++; } }).catch(() => { failures++; }));
     };
     if (plan.artist && plan.title) {
       job(async () => { const t = await deps.getTrack(plan.artist, plan.title, query.duration); if (t) add(fromLrclibTrack(t)); });
@@ -148,8 +150,8 @@ export async function resolveFresh(ctx: ResolveContext, deps: ResolveDeps = defa
 
 interface Stored { v: Resolved; at: number }
 
-/** Cached resolve: user override > storage.local (7d, null 1d) > network. */
-export async function resolveCached(ctx: ResolveContext, deps: ResolveDeps = defaultDeps): Promise<Resolved> {
+/** Cached resolve: user override > storage.local (7d, null 1d) > network. `fresh` skips the cache (user pressed retry). */
+export async function resolveCached(ctx: ResolveContext, deps: ResolveDeps = defaultDeps, opts: { fresh?: boolean } = {}): Promise<Resolved> {
   // toggling personal sources must not serve results cached under the other setting
   const key = resolveKey(ctx.videoId, ctx.chapterTitle) + (deps.kr ? '|kr' : '');
   const okey = overrideKey(ctx.videoId, ctx.chapterTitle);
@@ -161,7 +163,7 @@ export async function resolveCached(ctx: ResolveContext, deps: ResolveDeps = def
     const base = fresh ? hit.v : { candidates: [], query: { artist: override.artist, title: override.title } };
     return { ...base, result: override };
   }
-  if (fresh) return hit.v;
+  if (fresh && !opts.fresh) return hit.v;
   const v = await resolveFresh(ctx, deps);
   await chrome.storage.local.set({ [key]: { v, at: Date.now() } satisfies Stored }).catch(() => { /* quota */ });
   return v;

@@ -5,7 +5,7 @@ export type Request =
   | { type: 'lyrics:search'; q: string }
   | { type: 'palette:get'; videoId: string }
   | { type: 'video:meta'; videoId: string }
-  | { type: 'lyrics:resolve'; ctx: ResolveContext }
+  | { type: 'lyrics:resolve'; ctx: ResolveContext; fresh?: boolean }
   | { type: 'perm:status' }
   | { type: 'perm:open' };
 

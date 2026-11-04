@@ -138,7 +138,7 @@ async function handle(req: Request): Promise<unknown> {
       return { ok: true, result: await cached(key, () => lyricsFor(q)) };
     }
     case 'lyrics:resolve':
-      return { ok: true, ...(await resolveCached(req.ctx, (await krEnabled()) ? { ...defaultDeps, kr: { search: searchKr, lyrics: krLyrics } } : defaultDeps)) };
+      return { ok: true, ...(await resolveCached(req.ctx, (await krEnabled()) ? { ...defaultDeps, kr: { search: searchKr, lyrics: krLyrics } } : defaultDeps, { fresh: req.fresh })) };
     case 'lyrics:search': {
       const kr = await krEnabled();
       const key = `search:v4:${kr ? 'kr:' : ''}${norm(req.q)}`;

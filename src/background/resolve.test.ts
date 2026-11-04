@@ -41,6 +41,12 @@ describe('resolveFresh', () => {
     const fail = async () => { throw new Error('503'); };
     await expect(resolveFresh(ctx, deps({ searchTracks: fail, getTrack: fail, searchSongs: fail }))).rejects.toThrow();
   });
+  it('says "not found" (not an error) when some sources answered with nothing', async () => {
+    const fail = async () => { throw new Error('503'); };
+    const r = await resolveFresh(ctx, deps({ searchTracks: fail, getTrack: fail, searchSongs: async () => [] }));
+    expect(r.result).toBeNull();
+    expect(r.partial).toBe(true);
+  });
   it('uses NetEase songs with fetched lyrics', async () => {
     const r = await resolveFresh(ctx, deps({
       searchSongs: async () => [{ id: 1, name: 'FASHO', artists: [{ name: 'GroovyRoom' }], duration: 424000 }],
@@ -61,6 +67,14 @@ describe('resolveCached', () => {
     const r = await resolveCached(ctx, d);
     expect(calls).toBe(n);
     expect(r.result?.title).toBe('FASHO');
+  });
+  it('fresh skips a cached answer', async () => {
+    let calls = 0;
+    const d = deps({ searchTracks: async () => { calls++; return [good]; } });
+    await resolveCached(ctx, d);
+    const n = calls;
+    await resolveCached(ctx, d, { fresh: true });
+    expect(calls).toBeGreaterThan(n);
   });
   it('user override wins', async () => {
     mem[overrideKey(ctx.videoId)] = { kind: 'plain', artist: 'Me', title: 'Mine', lines: [{ time: -1, text: 'a' }], source: 'lrclib' };
