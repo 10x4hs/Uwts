@@ -5,7 +5,10 @@
 
 ## Download 작업하세요 with **Aside**
 
-1. 아래 **Assets**에서 `uwts-lyrics-x.y.z.zip`을 받아요.
+### **[⬇️ uwts-lyrics.zip 받기 (최신 버전)](https://github.com/10x4hs/Uwts/releases/latest/download/uwts-lyrics.zip)**
+
+1. 위의 **uwts-lyrics.zip 받기**를 눌러 파일을 받아요.
+   - 이전 버전과 바뀐 점은 [Releases](https://github.com/10x4hs/Uwts/releases)에 있어요.
 
 2. 압축을 풀면 나오는 **`uwts-lyrics` 폴더**를 지우지 않을 곳(예: 문서 폴더)에 옮겨 둬요.
 
@@ -25,6 +28,6 @@
 
 패널 위에 **새 버전 받기**가 뜨면(브라우저에서 GitHub에 로그인돼 있어야 해요):
 
-1. 눌러서 zip을 받아요.
+1. 눌러서 zip을 받아요. 위의 **uwts-lyrics.zip 받기**로 받아도 똑같아요.
 2. 압축을 풀어 원래 `uwts-lyrics` 폴더에 **덮어쓰기**해요.
 3. 유튜브를 새로고침하면 끝이에요.
