@@ -262,3 +262,27 @@
 .uw-update .uw-perm-btn { display: flex; align-items: center; justify-content: center; text-decoration: none; box-sizing: border-box; }
 .uw-perm-btn:hover { background: rgba(255,255,255,.22); }
 .uw-perm-btn:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* ---------- interlude waveform (under the line before a long pause) ---------- */
+.uw-break {
+  display: flex; align-items: center; gap: 14px; height: 0; margin-top: 0; opacity: 0; overflow: hidden;
+  pointer-events: none; cursor: default;
+  transition: height .35s cubic-bezier(.25,1,.5,1), margin-top .35s cubic-bezier(.25,1,.5,1), opacity .3s ease;
+}
+.uw-break.uw-break-on { height: 28px; margin-top: 18px; opacity: 1; }
+.uw-wave { display: flex; align-items: center; gap: 3px; height: 28px; }
+.uw-wave span { flex: none; width: 2px; height: 4px; border-radius: 1px; background: #fff; opacity: .22; transition: opacity .3s ease; }
+.uw-break-time {
+  font: 500 13px/1 ui-monospace, 'SF Mono', Menlo, monospace; letter-spacing: 0;
+  color: rgba(255,255,255,.6); -webkit-text-fill-color: currentColor; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Korean translation under each line ---------- */
+.uw-tr {
+  display: block; margin-top: 6px;
+  font-size: 15px; font-weight: 500; line-height: 1.35; letter-spacing: 0;
+  color: rgba(255,255,255,.5); -webkit-text-fill-color: currentColor;
+}
+.uw-current .uw-tr { color: rgba(255,255,255,.8); }
+.uw-tr-btn[aria-pressed='false'] { opacity: .55; }
+.uw-tr-btn[hidden] { display: none; }

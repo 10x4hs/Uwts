@@ -1,3 +1,4 @@
+import { translateLines } from './translate';
 import { checkUpdate, reloadIfFilesChanged } from './update';
 import { EXTRA_ORIGINS, type Request, type SearchHit } from '../shared/messages';
 import { groupSearch, rankSearch, searchRelevance } from '../lib/score';
@@ -161,6 +162,11 @@ async function handle(req: Request): Promise<unknown> {
       return { ok: true, granted: await chrome.permissions.contains({ origins: EXTRA_ORIGINS }) };
     case 'lyrics:words':
       try { return { ok: true, lines: await wordSyncFor(req, req.lines) }; } catch (e) { return { ok: false, error: String(e) }; }
+    case 'lyrics:translate':
+      try {
+        const tr = await translateLines(req.lines);
+        return { ok: true, lang: tr?.lang ?? '', lines: tr?.lines ?? null };
+      } catch (e) { return { ok: false, error: String(e) }; }
     case 'update:status':
       void reloadIfFilesChanged();
       return { ok: true, ...(await checkUpdate()) };

@@ -2,10 +2,10 @@ import { send, ContextInvalidated } from '../shared/messages';
 import type { Chapter, LyricLine, LyricsResult, Palette, ResolveContext, SongQuery } from '../shared/types';
 import { overrideKey } from '../lib/keys';
 import { buildQueries } from '../lib/queries';
-import { parseChapters, chapterAt } from '../lib/chapters';
+import { parseChapters, chapterAt, songListChapters } from '../lib/chapters';
 import { lineIndexAt } from '../lib/lrc';
 import { shiftHue } from '../lib/color';
-import { blurLevel, staggerDelay, scrollOffset, fillTiming, singingPace, wordChar, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
+import { blurLevel, staggerDelay, scrollOffset, fillTiming, singingPace, sungSeconds, wordChar, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
 import { segments, unitsToChar, priorOffset, estimateOffset, smoothOffset, isIntro, FillTracker, type Segment } from './align';
 import { VocalTracker } from './audio';
 import { addAnchor, timedLines, parseAnchors, groupByMatch, type Anchor } from './anchors';
@@ -32,6 +32,14 @@ function videoIdFromUrl(): string | null {
 
 // ---------- page metadata ----------
 const COLLAPSE_KEY = 'uw:collapsed';
+const TRANSLATE_KEY = 'uw:opt:translate';
+/** A pause between sung lines this long (seconds) shows the interlude waveform. */
+const BREAK_MIN_SEC = 6;
+/** Appear a moment after the line ends; collapse before the next line so its position is final. */
+const BREAK_LEAD_SEC = 0.4;
+const BREAK_EXIT_SEC = 0.6;
+const WAVE_BARS = 32;
+const ICON_TRANSLATE = 'M4 5h9M8.5 3v2M6 5c.6 3 2.6 5.6 5.5 7M11 5c-.8 3.4-3.3 6.4-7 8M13.5 21l4-10 4 10M15 17.5h5';
 /** Same-origin InnerTube call from the YouTube page itself: no extension host permission needed,
  *  and it returns the full (untruncated) description and exact length for this exact videoId. */
 async function metaInPage(videoId: string): Promise<{ title: string; channel: string; description: string; duration?: number } | null> {
@@ -132,6 +140,25 @@ const SEARCH_DEBOUNCE_MS = 300;
 const formatDuration = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/** Google (via the background) first; if that's blocked, Chrome's on-device translator for English. */
+async function translate(texts: string[]): Promise<(string | null)[] | null> {
+  const res = await send({ type: 'lyrics:translate', lines: texts }).catch(() => null);
+  if (res?.ok) return res.lines;
+  try {
+    const T = (globalThis as any).Translator;
+    const todo = texts.map((t) => /[a-z]/i.test(t) && !/[\uac00-\ud7a3]/.test(t));
+    if (!T || !todo.some(Boolean)) return null;
+    if ((await T.availability({ sourceLanguage: 'en', targetLanguage: 'ko' })) !== 'available') return null;
+    const tr = await T.create({ sourceLanguage: 'en', targetLanguage: 'ko' });
+    const out: (string | null)[] = [];
+    for (let i = 0; i < texts.length; i++) out.push(todo[i] ? await tr.translate(texts[i]) : null);
+    tr.destroy?.();
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 const SVG_NS = 'http://www.w3.org/2000/svg';
 function icon(d: string): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -194,6 +221,16 @@ class Panel {
   channel = '';
   videoTitle = '';
   chapters: Chapter[] = [];
+  /** interlude waveform, moved under the line whose pause it fills */
+  breakEl = el('div', 'uw-break');
+  waveBars: HTMLElement[] = [];
+  breakTime = el('span', 'uw-break-time');
+  breakOn = false;
+  /** Korean translation of the shown lyrics (keyed by their text) and whether to show it */
+  translateOn = true;
+  translation: { key: string; lines: (string | null)[] } | null = null;
+  translating = '';
+  trBtn = el('button', 'uw-btn uw-chip uw-tr-btn');
   /** chapters came from the pinned/creator comment's tracklist */
   commentChapters = false;
   chapterIndex = -1;
@@ -273,7 +310,18 @@ class Panel {
     this.collapseBtn.type = 'button';
     this.collapseBtn.append(icon(ICON_CHEVRON));
     this.collapseBtn.addEventListener('click', () => this.setCollapsed(!this.root.classList.contains('uw-collapsed'), true));
-    header.append(this.thumb, meta, searchBtn, this.collapseBtn);
+    this.trBtn.type = 'button';
+    this.trBtn.hidden = true;
+    this.trBtn.setAttribute('aria-label', '한국어 번역 보기');
+    this.trBtn.setAttribute('aria-pressed', 'true');
+    this.trBtn.append(icon(ICON_TRANSLATE));
+    this.trBtn.addEventListener('click', () => this.setTranslate(!this.translateOn, true));
+    header.append(this.thumb, meta, this.trBtn, searchBtn, this.collapseBtn);
+    const wave = el('div', 'uw-wave');
+    for (let i = 0; i < WAVE_BARS; i++) { const b = el('span'); wave.append(b); this.waveBars.push(b); }
+    this.breakEl.setAttribute('aria-hidden', 'true');
+    this.breakEl.append(wave, this.breakTime);
+    this.breakEl.addEventListener('click', (e) => e.stopPropagation());
     const syncRow = el('div', 'uw-sync');
     this.syncBtn.type = 'button';
     this.syncBtn.setAttribute('aria-pressed', 'false');
@@ -413,6 +461,9 @@ class Panel {
     chrome.storage?.local.get(COLLAPSE_KEY).then((r) => {
       if (this.alive) this.setCollapsed(Boolean(r[COLLAPSE_KEY]), false);
     }).catch(() => {});
+    chrome.storage?.local.get(TRANSLATE_KEY).then((r) => {
+      if (this.alive && r[TRANSLATE_KEY] === false) this.setTranslate(false, false);
+    }).catch(() => {});
     void this.identify();
   }
 
@@ -509,6 +560,81 @@ class Panel {
     }
     this.setCurrent(lineIndexAt(lines, lt));
     this.stepVoiceFill(lt);
+    this.stepBreak(lines, lt);
+  }
+
+  /** Interlude waveform under the line before a long pause: bars light up as the pause runs out. */
+  stepBreak(lines: LyricLine[], lt: number) {
+    const i = this.current;
+    const line = lines[i];
+    const next = lines[i + 1];
+    let show = false;
+    let p = 0;
+    let left = 0;
+    if (line && next && !this.syncMode) {
+      const end = line.time + sungSeconds(line, Math.max(0, next.time - line.time), this.paceOf(lines));
+      const gap = next.time - end;
+      if (gap >= BREAK_MIN_SEC && lt >= end + BREAK_LEAD_SEC && lt < next.time - BREAK_EXIT_SEC) {
+        show = true;
+        p = (lt - end) / gap;
+        left = next.time - lt;
+      }
+    }
+    const cur = this.lineEls[i];
+    if (show && cur && this.breakEl.parentElement !== cur) {
+      this.breakEl.classList.remove('uw-break-on');
+      cur.append(this.breakEl);
+      void this.breakEl.offsetWidth; // start collapsed so it grows open
+    }
+    if (show !== this.breakOn) { this.breakOn = show; this.breakEl.classList.toggle('uw-break-on', show); }
+    if (!show) return;
+    const sec = Math.max(0, Math.ceil(left));
+    const txt = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+    if (this.breakTime.textContent !== txt) this.breakTime.textContent = txt;
+    const still = reducedMotion();
+    const s = performance.now() / 1000;
+    const level = 0.6 + 0.4 * Math.min(1, this.tracker?.activity ?? 0);
+    this.waveBars.forEach((b, k) => {
+      const w = still ? 0.5 : 0.5 + 0.5 * Math.sin(s * 6 + k * 0.55) * Math.cos(s * 2.3 + k * 0.21);
+      b.style.height = `${(4 + 22 * w * level).toFixed(1)}px`;
+      b.style.opacity = k / WAVE_BARS < p ? '.92' : '.22';
+    });
+  }
+
+  setTranslate(on: boolean, persist: boolean) {
+    this.translateOn = on;
+    this.trBtn.setAttribute('aria-pressed', String(on));
+    this.trBtn.setAttribute('aria-label', on ? '한국어 번역 숨기기' : '한국어 번역 보기');
+    if (persist) chrome.storage?.local.set({ [TRANSLATE_KEY]: on }).catch(() => {});
+    this.applyTranslation();
+  }
+
+  /** Ask for a Korean translation of the shown lyrics (once per lyrics text). */
+  requestTranslation(result: LyricsResult) {
+    const texts = result.lines.map((l) => l.text);
+    const key = texts.join('\n');
+    if (this.translation?.key === key || this.translating === key) return;
+    this.translating = key;
+    void translate(texts).then((lines) => {
+      if (this.translating === key) this.translating = '';
+      if (!this.alive || this.state.result?.lines.map((l) => l.text).join('\n') !== key) return;
+      this.translation = { key, lines: lines ?? [] };
+      this.applyTranslation();
+    });
+  }
+
+  /** Put (or take away) the translation under each line, keeping the current line in place. */
+  applyTranslation() {
+    const tr = this.translation;
+    const key = this.state.result?.lines.map((l) => l.text).join('\n');
+    const lines = tr && tr.key === key ? tr.lines : [];
+    this.trBtn.hidden = !lines.some(Boolean);
+    this.lineEls.forEach((p, i) => {
+      p.querySelector('.uw-tr')?.remove();
+      const t = this.translateOn ? lines[i] : null;
+      if (t) p.querySelector('.uw-text')?.after(el('span', 'uw-tr', t));
+    });
+    this.follow();
   }
 
   lyricTime(): number {
@@ -897,7 +1023,7 @@ class Panel {
     }
     this.videoTitle = title;
     this.channel = channel;
-    this.chapters = description ? parseChapters(description) : [];
+    this.chapters = description ? songListChapters(parseChapters(description), this.metaDuration) : [];
     this.commentChapters = false;
     const tl = timelineInPage(this.videoId);
     const long = !this.chapters.length && (this.metaDuration ?? 0) > LONG_VIDEO_SEC;
@@ -1289,6 +1415,10 @@ class Panel {
         this.lineEls.push(p);
         this.lyricsEl.append(p);
       });
+      this.breakOn = false;
+      this.breakEl.classList.remove('uw-break-on');
+      this.applyTranslation();
+      this.requestTranslation(s.result);
       if (!synced) this.body.scrollTop = 0;
       if (synced) { this.follow(); this.tick(); }
     } else if (s.status === 'notfound') {

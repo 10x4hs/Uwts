@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseChapters, chapterAt } from './chapters';
+import { parseChapters, chapterAt, songListChapters } from './chapters';
 
 describe('parseChapters', () => {
   it('parses variants', () => {
@@ -25,5 +25,17 @@ describe('parseChapters', () => {
     expect(chapterAt(c, 55)).toBeNull();
     expect(chapterAt(c, 100)).toEqual({ chapter: c[1], index: 1, end: 200 });
     expect(chapterAt(c, 250)).toBeNull();
+  });
+});
+
+describe('songListChapters', () => {
+  const parts = [{ start: 0, title: '타임라인 : NSW yoon' }, { start: 41, title: '타임라인 : BIG naughty (서동현)' }, { start: 70, title: '타임라인 : NSW yoon' }, { start: 110, title: '타임라인 : Xwally' }, { start: 150, title: '타임라인 : NSW yoon' }];
+  it('drops parts of one song', () => {
+    expect(songListChapters(parts, 210)).toEqual([]);
+    expect(songListChapters(parts)).toEqual([]);
+  });
+  it('keeps a real playlist', () => {
+    const songs = [{ start: 0, title: 'A - a' }, { start: 200, title: 'B - b' }, { start: 430, title: 'C - c' }];
+    expect(songListChapters(songs, 3600)).toEqual(songs);
   });
 });

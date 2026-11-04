@@ -40,3 +40,16 @@ export function chapterAt(chapters: Chapter[], t: number): { chapter: Chapter; i
   if (c.end != null && t >= c.end) return null;
   return { chapter: c, index: idx, end: c.end ?? (idx + 1 < chapters.length ? chapters[idx + 1].start : null) };
 }
+
+/** Songs are rarely under this long; chapters shorter than it are parts of one song (verses, rappers). */
+const SONG_MIN_SEC = 90;
+const SHORT_VIDEO_SEC = 8 * 60;
+
+/** Chapters that split a playlist into songs, or [] when they split one song into parts. */
+export function songListChapters(chapters: Chapter[], duration?: number): Chapter[] {
+  if (chapters.length < 2) return chapters;
+  if (duration && duration < SHORT_VIDEO_SEC) return [];
+  const lens = chapters.slice(0, -1).map((c, i) => (c.end ?? chapters[i + 1].start) - c.start).sort((a, b) => a - b);
+  const median = lens[Math.floor(lens.length / 2)];
+  return median < SONG_MIN_SEC ? [] : chapters;
+}
