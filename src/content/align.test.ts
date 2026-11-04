@@ -89,3 +89,22 @@ describe('FillTracker', () => {
     expect(b.p).toBeGreaterThan(a.p);
   });
 });
+
+import { introLikely } from './align';
+describe('intro prior gating', () => {
+  const lines = [{ time: 12, text: 'a' }, { time: 150, text: 'b' }];
+  it('only official MVs get an intro guess', () => {
+    expect(introLikely("SEUNGRI - '셋 셀테니 (1, 2, 3!)' M/V")).toBe(true);
+    expect(introLikely("ILLIT (아일릿) '체포하겠어 (You’re Under Arrest)' | PRESS START♥︎ ENCORE")).toBe(false);
+    expect(introLikely("RESCENE (리센느) 'With' Official MV")).toBe(true);
+    expect(introLikely("BewhY (비와이) - 악수 [POP IS CRYIN']ㅣLyrics/가사")).toBe(false);
+    expect(introLikely('IU 좋은날 Live Stage MV')).toBe(false);
+  });
+  it('uses the real track duration and skips non-MVs', () => {
+    expect(priorOffset(216, lines, 214, "ILLIT '체포하겠어' | PRESS START ENCORE")).toBe(0);
+    expect(priorOffset(333, lines, 204, "SEUNGRI - '셋 셀테니' M/V")).toBe(90);
+    expect(priorOffset(240, lines, 200, 'X - Y Official MV')).toBe(40);
+    expect(priorOffset(240, lines, undefined, undefined)).toBe(round(240 - 154));
+  });
+});
+function round(x: number) { return Math.round(x * 10) / 10; }

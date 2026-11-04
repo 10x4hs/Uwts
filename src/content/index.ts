@@ -156,7 +156,9 @@ class Panel {
   resetBtn = el('button', 'uw-btn uw-chip uw-sync-btn uw-reset-btn', '싱크 초기화');
   estTimer = 0;
   toastTimer = 0;
-  introEl = el('div', 'uw-intro', '♪');
+  introEl = el('div', 'uw-intro');
+  introText = el('span', 'uw-intro-text', '');
+  introBtn = el('button', 'uw-btn uw-chip uw-intro-btn', '지금 시작됐어요');
   toastEl = el('div', 'uw-toast');
 
   constructor(videoId: string, token: number) {
@@ -191,22 +193,34 @@ class Panel {
     this.collapseBtn.addEventListener('click', () => this.setCollapsed(!this.root.classList.contains('uw-collapsed'), true));
     header.append(this.thumb, meta, searchBtn, this.collapseBtn);
     const syncRow = el('div', 'uw-sync');
-    for (const [label, d, aria] of [['−0.5s', -0.5, '가사 0.5초 빠르게'], ['+0.5s', 0.5, '가사 0.5초 늦게']] as const) {
+    // '+' moves the lyrics earlier (ahead), '−' later. syncOffset is subtracted from the video
+    // time, so '+0.5s' means syncOffset − 0.5.
+    for (const [label, d, aria, done] of [
+      ['−0.5s', 0.5, '가사 0.5초 늦추기', '가사를 0.5초 늦췄어요'],
+      ['+0.5s', -0.5, '가사 0.5초 앞당기기', '가사를 0.5초 앞당겼어요'],
+    ] as const) {
       const b = el('button', 'uw-btn uw-chip uw-sync-btn', label);
       b.type = 'button';
       b.setAttribute('aria-label', aria);
-      b.addEventListener('click', () => this.setManualOffset(this.syncOffset + d));
+      b.title = aria;
+      b.addEventListener('click', () => this.setManualOffset(this.syncOffset + d, done));
       syncRow.append(b);
     }
     this.resetBtn.type = 'button';
     this.resetBtn.hidden = true;
     this.resetBtn.addEventListener('click', () => this.clearAnchors());
     syncRow.prepend(this.resetBtn);
-    this.introEl.setAttribute('aria-hidden', 'true');
+    // The intro length is a guess (video longer than the track): never hide the lyrics behind it,
+    // show when we expect the song to start and let the user correct it with one tap.
+    this.introEl.setAttribute('role', 'status');
+    this.introBtn.type = 'button';
+    this.introBtn.setAttribute('aria-label', '노래가 지금 시작됐어요. 첫 줄을 지금 시간에 맞추기');
+    this.introBtn.addEventListener('click', () => this.lineSungNow(0));
+    this.introEl.append(el('span', 'uw-intro-note', '♪'), this.introText, this.introBtn);
     this.introEl.hidden = true;
     this.toastEl.setAttribute('role', 'status');
     this.buildSearch();
-    this.body.append(this.searchEl, this.lyricsEl, this.introEl);
+    this.body.append(this.searchEl, this.lyricsEl);
     const permBar = el('div', 'uw-perm');
     permBar.hidden = true;
     const permBtn = el('button', 'uw-btn uw-perm-btn', '더 많은 곡 찾기: 가사 소스 권한 허용');
@@ -214,7 +228,8 @@ class Panel {
     permBtn.addEventListener('click', () => { void send({ type: 'perm:open' }).catch(() => {}); });
     permBar.append(permBtn);
     void send({ type: 'perm:status' }).then((r) => { if (r.ok && !r.granted) permBar.hidden = false; }).catch(() => {});
-    this.root.append(this.bg, header, permBar, syncRow, this.body, this.toastEl);
+    // intro bar sits outside the scrolling/faded lyrics body so it stays crisp
+    this.root.append(this.bg, header, permBar, syncRow, this.introEl, this.body, this.toastEl);
     // Keep typing inside the panel away from YouTube's global hotkeys (t = theater, f = fullscreen,
     // k/j/l = playback, / = search...), which otherwise fire while the user types a song name.
     for (const type of ['keydown', 'keypress', 'keyup'] as const) {
@@ -368,7 +383,12 @@ class Panel {
     const lt = this.lyricTime();
     const intro = isIntro(lines, lt);
     this.root.classList.toggle('uw-intro-on', intro);
-    this.introEl.hidden = !intro;
+    if (this.introEl.hidden === intro) this.introEl.hidden = !intro;
+    if (intro && lines.length) {
+      const left = Math.max(0, Math.round(lines[0].time - lt));
+      const txt = `노래 시작 전 · 약 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} 후`;
+      if (this.introText.textContent !== txt) this.introText.textContent = txt;
+    }
     this.setCurrent(lineIndexAt(lines, lt));
     this.stepVoiceFill(lt);
   }
@@ -391,11 +411,11 @@ class Panel {
     this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('uw-toast-on'), 1400);
   }
 
-  setManualOffset(o: number) {
+  setManualOffset(o: number, message?: string) {
     this.syncOffset = Math.round(o * 10) / 10;
     this.manualSync = true;
     chrome.storage?.local.set({ [offsetKey(this.videoId)]: this.syncOffset }).catch(() => {});
-    this.showToast(formatOffset(this.syncOffset));
+    this.showToast(message ?? formatOffset(this.syncOffset));
     this.refresh();
   }
 
@@ -771,7 +791,7 @@ class Panel {
   applyPrior(result: LyricsResult | null = this.state.result) {
     if (this.manualSync || this.autoConfident || this.anchors.length) return;
     const dur = this.chapters.length ? undefined : this.currentDuration();
-    const next = result ? priorOffset(dur, result.lines) : 0;
+    const next = result ? priorOffset(dur, result.lines, (result as { duration?: number }).duration, this.videoTitle) : 0;
     if (next === this.syncOffset) return;
     this.syncOffset = next;
     if (this.timed) this.refresh();

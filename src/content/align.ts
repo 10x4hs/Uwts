@@ -53,11 +53,24 @@ export const WINDOW = 0.25;
 export const TAIL_SEC = 4;
 
 /** Prior offset candidate from duration mismatch (intro before the song). */
-export function priorOffset(videoDuration: number | undefined, lines: LyricLine[]): number {
+export function priorOffset(videoDuration: number | undefined, lines: LyricLine[], trackDuration?: number, videoTitle?: string): number {
   if (!videoDuration || !isFinite(videoDuration) || !lines.length) return 0;
-  const trackEnd = lines[lines.length - 1].time + TAIL_SEC;
+  // Only official music videos tend to put a non-musical intro before the song. Live stages,
+  // lyric/audio uploads and covers are usually longer because of applause/talk/outros instead.
+  if (videoTitle !== undefined && !introLikely(videoTitle)) return 0;
+  // Prefer the real track length from the lyrics source; "last line + tail" underestimates
+  // songs with a long instrumental outro and inflates the guessed intro.
+  const trackEnd = trackDuration && trackDuration > 0 ? trackDuration : lines[lines.length - 1].time + TAIL_SEC;
   const diff = videoDuration - trackEnd;
   return diff > 3 ? Math.min(90, Math.max(0, round1(diff))) : 0;
+}
+
+const MV_RE = /\bm\/?v\b|music\s*video|뮤직\s*비디오|뮤비/i;
+const NOT_MV_RE = /\b(live|stage|encore|concert|performance|perf\.?|lyrics?|audio|visuali[sz]er|cover|dance\s*practice|fancam|직캠|교차편집|special\s*clip)\b|라이브|무대|가사|커버|공연|앵콜|앙코르|안무|연습/i;
+
+/** Titles where a pre-song (drama) intro is plausible: official MVs that are not stages/lyric videos. */
+export function introLikely(videoTitle: string): boolean {
+  return MV_RE.test(videoTitle) && !NOT_MV_RE.test(videoTitle);
 }
 
 function lowerBound(a: Onset[], t: number): number {
