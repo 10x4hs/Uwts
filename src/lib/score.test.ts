@@ -119,6 +119,13 @@ describe('searchMatch / groupSearch', () => {
     expect(searchMatch('aespa whiplash remix', 'aespa', 'Whiplash')).toBe('partial');
     expect(searchMatch('whiplash', '华晨宇', '烟火里的尘埃')).toBeNull();
   });
+  it('drops Chinese covers when the original is there, demotes them otherwise', () => {
+    const out = groupSearch('보름달', [R('宣美, Lena', '보름달'), R('DaHee, 梦酱', '보름달(滿月)'), R('선미 (SUNMI)', '보름달 (Full Moon)')]);
+    expect(out.map((r) => r.artist)).toEqual(['선미 (SUNMI)']);
+    const only = groupSearch('보름달', [R('宣美, Lena', '보름달')]);
+    expect(only.map((r) => r.match)).toEqual(['partial']);
+    expect(groupSearch('华晨宇 烟火里的尘埃', [R('华晨宇', '烟火里的尘埃')])[0]?.match).toBe('exact');
+  });
   it('orders exact first and tags results', () => {
     const out = groupSearch('aespa whiplash', [R('aespa', 'Whiplash (Remix) extra words'), R('x', 'Other'), R('aespa', 'Whiplash')]);
     expect(out.map((x) => [x.title, x.match])).toEqual([['Whiplash', 'exact'], ['Whiplash (Remix) extra words', 'partial']]); // remixes are demoted unless asked for

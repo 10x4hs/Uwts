@@ -164,6 +164,17 @@ export function searchMatch(query: string, artist: string, title: string): Searc
   return searchRelevance(query, artist, title) >= 0.5 ? 'partial' : null;
 }
 
+const HAN_SCRIPT = /\p{Script=Han}/u;
+/** Artist uses Chinese characters while the query has none. */
+export function foreignHan(query: string, artist: string): boolean {
+  return HAN_SCRIPT.test(artist) && !HAN_SCRIPT.test(query);
+}
+/** Another result with the same title whose artist is not written in Chinese characters. */
+function hasLatinOrHangulPeer<T extends { artist: string; title: string }>(list: T[], r: T): boolean {
+  const t = normText(displayTitleKey(r.title).replace(/[(（][^)）]*[)）]/g, ''));
+  return list.some((o) => o !== r && !HAN_SCRIPT.test(o.artist) && normText(displayTitleKey(o.title).replace(/[(（][^)）]*[)）]/g, '')) === t);
+}
+
 /** Search results tagged exact|partial: exact first, then by relevance, synced before plain on ties. */
 export function groupSearch<T extends { artist: string; title: string; kind: string }>(query: string, list: T[]): (T & { match: SearchMatch })[] {
   const out: { r: T & { match: SearchMatch }; s: number; t: number }[] = [];
@@ -178,6 +189,9 @@ export function groupSearch<T extends { artist: string; title: string; kind: str
     let match = searchMatch(query, r.artist, r.title);
     // covers/remixes/instrumentals only count as exact when the user asked for them
     if (match === 'exact' && isVariant(r.title) && !isVariant(query)) match = 'partial';
+    // NetEase is full of Chinese user covers of K-pop ("宣美, Lena", "DaHee, 梦酱"): an artist written
+    // in Chinese characters the query doesn't use is not the original singer
+    if (foreignHan(query, r.artist)) { if (hasLatinOrHangulPeer(list, r)) continue; match = 'partial'; }
     // t: share of the candidate's words that the query covers (fewer extra words = closer)
     if (match) out.push({ r: { ...r, match }, s: searchRelevance(query, r.artist, r.title), t: tokenOverlap(normText(`${r.artist} ${r.title}`), q) });
   }
