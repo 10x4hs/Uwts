@@ -6,7 +6,8 @@
     "build": "node build.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "pack": "npm run build && node scripts/pack.mjs"
+    "pack": "npm run build && node scripts/pack.mjs",
+    "release": "node scripts/release.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

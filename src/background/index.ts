@@ -1,3 +1,4 @@
+import { checkUpdate, reloadIfFilesChanged } from './update';
 import { EXTRA_ORIGINS, type Request, type SearchHit } from '../shared/messages';
 import { groupSearch, rankSearch, searchRelevance } from '../lib/score';
 import { krEnabled, krLyrics, searchKr } from './kr';
@@ -157,6 +158,9 @@ async function handle(req: Request): Promise<unknown> {
     }
     case 'perm:status':
       return { ok: true, granted: await chrome.permissions.contains({ origins: EXTRA_ORIGINS }) };
+    case 'update:status':
+      void reloadIfFilesChanged();
+      return { ok: true, ...(await checkUpdate()) };
     case 'perm:open':
       await chrome.tabs.create({ url: chrome.runtime.getURL('grant.html') });
       return { ok: true };
@@ -171,3 +175,6 @@ chrome.runtime.onMessage.addListener((req: Request, _sender, sendResponse) => {
     .catch((e: unknown) => sendResponse({ ok: false, error: e instanceof Error ? e.message : String(e) }));
   return true;
 });
+
+// a friend unzipped a new version over the folder: run it
+void reloadIfFilesChanged();

@@ -11,7 +11,8 @@
     "https://lrclib.net/*",
     "https://i.ytimg.com/*",
     "https://music.163.com/*",
-    "https://www.youtube.com/*"
+    "https://www.youtube.com/*",
+    "https://github.com/*"
   ],
   "background": {
     "service_worker": "background.js"

@@ -270,8 +270,21 @@ class Panel {
     permBtn.addEventListener('click', () => { void send({ type: 'perm:open' }).catch(() => {}); });
     permBar.append(permBtn);
     void send({ type: 'perm:status' }).then((r) => { if (r.ok && !r.granted) permBar.hidden = false; }).catch(() => {});
+    const updBar = el('div', 'uw-perm uw-update');
+    updBar.hidden = true;
+    const updBtn = el('a', 'uw-btn uw-perm-btn', '');
+    updBtn.target = '_blank';
+    updBtn.rel = 'noopener';
+    updBar.append(updBtn);
+    void send({ type: 'update:status' }).then((r) => {
+      if (!r.ok || !r.latest || !r.url || !this.alive) return;
+      updBtn.href = r.url;
+      updBtn.textContent = `새 버전 ${r.latest} 받기 · 같은 폴더에 덮어쓰면 끝`;
+      updBtn.title = `지금 ${r.current} → ${r.latest}. 받은 zip을 원래 uwts-lyrics 폴더에 덮어써 주세요.`;
+      updBar.hidden = false;
+    }).catch(() => {});
     // intro bar sits outside the scrolling/faded lyrics body so it stays crisp
-    this.root.append(this.bg, header, permBar, syncRow, this.syncHint, this.introEl, this.body, this.toastEl);
+    this.root.append(this.bg, header, permBar, updBar, syncRow, this.syncHint, this.introEl, this.body, this.toastEl);
     // Keep typing inside the panel away from YouTube's global hotkeys (t = theater, f = fullscreen,
     // k/j/l = playback, / = search...), which otherwise fire while the user types a song name.
     for (const type of ['keydown', 'keypress', 'keyup'] as const) {

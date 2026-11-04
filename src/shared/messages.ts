@@ -7,7 +7,8 @@ export type Request =
   | { type: 'video:meta'; videoId: string }
   | { type: 'lyrics:resolve'; ctx: ResolveContext; fresh?: boolean }
   | { type: 'perm:status' }
-  | { type: 'perm:open' };
+  | { type: 'perm:open' }
+  | { type: 'update:status' };
 
 export type Response<R extends Request> =
   R extends { type: 'lyrics:get' } ? { ok: true; result: LyricsResult | null } | { ok: false; error: string } :
@@ -15,6 +16,7 @@ export type Response<R extends Request> =
   R extends { type: 'palette:get' } ? { ok: true; palette: Palette } | { ok: false; error: string } :
   R extends { type: 'perm:status' } ? { ok: true; granted: boolean } :
   R extends { type: 'perm:open' } ? { ok: true } :
+  R extends { type: 'update:status' } ? { ok: true; current: string; latest?: string; url?: string } :
   R extends { type: 'lyrics:resolve' } ? { ok: true; result: LyricsResult | null; candidates: LyricsResult[]; query: SongQuery } | { ok: false; error: string } :
   R extends { type: 'video:meta' } ? { ok: true; title: string; channel: string; description?: string; duration?: number } | { ok: false; error: string } : never;
 
