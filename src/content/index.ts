@@ -500,7 +500,18 @@ class Panel {
       ? '지금 부르고 있는 줄을 눌러 주세요 · 두세 곳 맞추면 따라가요'
       : '지금 부르고 있는 줄을 눌러 주세요';
     this.syncHint.hidden = !on;
-    if (!on) this.resetManualScroll();
+    // while syncing the lyrics hold still, so the line the user is about to tap doesn't move away
+    this.syncHold = on ? Math.max(0, this.current) : -1;
+    if (!on) { this.resetManualScroll(); this.follow(); }
+  }
+
+  /** Line index the lyrics are frozen on during sync mode (-1 = follow the song). */
+  syncHold = -1;
+
+  /** Scroll the active line into place, or keep the frozen position while syncing. */
+  follow() {
+    const i = this.syncMode && this.syncHold >= 0 ? this.syncHold : this.current;
+    this.position(this.lineEls[i] ?? this.lineEls[0]);
   }
 
   /** A tap in sync mode. Synced lyrics are fixed by one tap; plain lyrics need two to start following. */
@@ -658,7 +669,7 @@ class Panel {
       e.style.setProperty('--delay', `${staggerDelay(k, i, seek)}s`);
     });
     const cur = this.lineEls[i];
-    this.position(cur ?? this.lineEls[0]);
+    this.follow();
     this.fill = null;
     if (!cur) return;
     cur.classList.add('uw-current');
@@ -1189,7 +1200,7 @@ class Panel {
         this.lyricsEl.append(p);
       });
       if (!synced) this.body.scrollTop = 0;
-      if (synced) { this.position(this.lineEls[0]); this.tick(); }
+      if (synced) { this.follow(); this.tick(); }
     } else if (s.status === 'notfound') {
       this.renderNotFound();
     } else if (s.status === 'error') {
