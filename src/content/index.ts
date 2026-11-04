@@ -10,6 +10,7 @@ import { segments, unitsToChar, priorOffset, estimateOffset, smoothOffset, isInt
 import { VocalTracker } from './audio';
 import { addAnchor, timedLines, parseAnchors, groupByMatch, type Anchor } from './anchors';
 import { timelineParams, parseTimeline, songChapters, type Timeline } from '../lib/timeline';
+import { commentsToken, parseComments, pickTracklist } from '../lib/comments';
 import { alignToTranscript, type TranscriptSeg } from './asr';
 import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, displayTitle, displayArtist, type Action, type PanelState } from './state';
 
@@ -65,6 +66,31 @@ async function timelineInPage(videoId: string): Promise<Timeline | null> {
     return parseTimeline(await res.json());
   } catch {
     return null;
+  }
+}
+
+/** Tracklist from the pinned (or the creator's) comment, the way many playlist channels post it. */
+async function commentTracklistInPage(videoId: string, duration?: number): Promise<Chapter[]> {
+  try {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    const post = async (body: object) => {
+      const res = await fetch('/youtubei/v1/next?prettyPrint=false', {
+        method: 'POST', credentials: 'same-origin', signal: ctl.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ context: { client: { clientName: 'WEB', clientVersion: '2.20241023.01.00', hl: 'ko' } }, ...body }),
+      });
+      return res.ok ? res.json() : null;
+    };
+    try {
+      const token = commentsToken(await post({ videoId }));
+      if (!token) return [];
+      return pickTracklist(parseComments(await post({ continuation: token })), duration);
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return [];
   }
 }
 
@@ -168,6 +194,8 @@ class Panel {
   channel = '';
   videoTitle = '';
   chapters: Chapter[] = [];
+  /** chapters came from the pinned/creator comment's tracklist */
+  commentChapters = false;
   chapterIndex = -1;
   /** YouTube auto-captions for the whole video (from the timeline panel); used to place the lyrics. */
   transcript: TranscriptSeg[] = [];
@@ -870,16 +898,30 @@ class Panel {
     this.videoTitle = title;
     this.channel = channel;
     this.chapters = description ? parseChapters(description) : [];
+    this.commentChapters = false;
     const tl = timelineInPage(this.videoId);
-    if (!this.chapters.length && (this.metaDuration ?? 0) > LONG_VIDEO_SEC) {
+    const long = !this.chapters.length && (this.metaDuration ?? 0) > LONG_VIDEO_SEC;
+    const cm = long ? commentTracklistInPage(this.videoId, this.metaDuration) : null;
+    if (long) {
       // a playlist: resolving its title as one song would show a wrong song or "not found" first
-      const got = await Promise.race([tl, sleep(TIMELINE_WAIT_MS).then(() => null)]);
+      const wait = sleep(TIMELINE_WAIT_MS).then(() => null);
+      const [gotTl, gotCm] = await Promise.all([Promise.race([tl, wait]), Promise.race([cm!, wait])]);
       if (!this.alive) return;
-      if (got) this.useTimeline(got, false);
+      if (gotCm?.length) this.useCommentTracklist(gotCm, false);
+      if (gotTl) this.useTimeline(gotTl, false);
     }
     this.ready = true;
     this.resolveSong();
     void tl.then((t) => { if (t && this.alive) this.useTimeline(t, true); });
+    void cm?.then((c) => { if (c.length && this.alive) this.useCommentTracklist(c, true); });
+  }
+
+  /** The uploader's own tracklist beats YouTube's song cards, which often list only some songs. */
+  useCommentTracklist(list: Chapter[], late: boolean) {
+    if (this.commentChapters) return;
+    this.commentChapters = true;
+    this.chapters = list;
+    if (late && this.ready) { this.ctxKey = ''; this.resolveSong(); }
   }
 
   /** Song cards become chapters (when the description has none); captions place the lyrics. */
