@@ -75,17 +75,19 @@
 .uw-lyrics { --uw-y: 0px; --uw-m: 0px; position: relative; display: flex; flex-direction: column; gap: 22px; padding-bottom: 300px; }
 .uw-line {
   --blur: 0px; --delay: 0s;
+  /* every line state must keep this transform transition, or that line snaps while the rest glide */
+  --uw-move: transform .55s cubic-bezier(.25,1,.5,1) var(--delay);
   position: relative; margin: 0; cursor: pointer;
   font-size: 26px; font-weight: 700; line-height: 1.2; letter-spacing: -0.01em;
   color: rgba(255,255,255,.45);
   transform-origin: left center; contain: layout style;
   transform: translateY(calc(var(--uw-y) + var(--uw-m))) scale(.97);
   filter: blur(var(--blur));
-  transition: transform .45s cubic-bezier(0.41,0,0.12,0.99) var(--delay), filter .6s ease, color .6s ease, opacity .6s ease;
+  transition: var(--uw-move), filter .6s ease, color .6s ease, opacity .6s ease;
 }
 .uw-past { opacity: .85; }
 .uw-line:hover:not(.uw-current):not(.uw-plain) { color: rgba(255,255,255,.7); filter: none; }
-.uw-done { color: #fff; transition: transform .45s cubic-bezier(0.41,0,0.12,0.99) var(--delay), filter .6s ease, opacity .6s ease; }
+.uw-done { color: #fff; transition: var(--uw-move), filter .6s ease, opacity .6s ease; }
 .uw-current {
   transform: translateY(calc(var(--uw-y) + var(--uw-m))) scale(1);
   color: transparent; -webkit-text-fill-color: transparent;
@@ -160,7 +162,8 @@
 }
 
 /* ---------- sync: voice fill, intro, manual offset ---------- */
-.uw-current.uw-voice { animation: none; background-size: var(--uw-fill-size, 0%) 100%; transition: background-size .09s linear; }
+.uw-current.uw-voice { animation: none; background-size: var(--uw-fill-size, 0%) 100%; transition: var(--uw-move), background-size .09s linear, filter .6s ease, opacity .6s ease; }
+.uw-manual .uw-current.uw-voice { transition: transform 0s, background-size .09s linear; }
 .uw-intro {
   position: relative; z-index: 3; display: flex; align-items: center; gap: 10px;
   margin: 0 16px 8px; padding: 8px 8px 8px 14px; border-radius: 16px;
@@ -179,10 +182,19 @@
 .uw-intro-on .uw-lyrics { opacity: .8; }
 @keyframes uw-intro-bob { 50% { transform: translateY(-3px); } }
 .uw-sync { display: flex; gap: 6px; justify-content: flex-end; padding: 0 16px 6px; position: relative; }
-.uw-sync-btn { width: auto; height: 26px; padding: 0 10px; font-size: 12px; border-radius: 13px; }
-.uw-collapsed .uw-sync, .uw-panel:not([data-status='synced']):not(.uw-has-anchors) .uw-sync { display: none; }
-.uw-panel:not([data-status='synced']) .uw-sync-btn:not(.uw-reset-btn) { display: none; }
+.uw-panel .uw-sync-btn {
+  width: auto; min-width: 0; height: 30px; min-height: 30px; padding: 0 12px; border-radius: 15px;
+  display: inline-flex; align-items: center; white-space: nowrap;
+  font-family: inherit; font-size: 12px; font-weight: 600; line-height: 1; color: #fff; cursor: pointer;
+}
+.uw-panel .uw-sync-toggle[aria-pressed='true'] { background: var(--uw-glow); border-color: transparent; color: #111; }
+.uw-collapsed .uw-sync, .uw-searching .uw-sync, .uw-panel:not([data-status='synced']):not([data-status='plain']) .uw-sync { display: none; }
 .uw-reset-btn[hidden] { display: none; }
+/* sync mode: every line is readable and tappable; the intro bar steps aside for the hint */
+.uw-sync-hint[hidden], .uw-syncmode .uw-intro:not(.uw-sync-hint) { display: none; }
+.uw-syncmode .uw-line { filter: none; cursor: pointer; }
+.uw-syncmode .uw-line:hover { color: rgba(255,255,255,.9); }
+.uw-syncmode .uw-plain:hover { color: #fff; text-shadow: 0 0 18px var(--uw-glow); }
 .uw-anchored::before { content: ''; display: inline-block; width: 6px; height: 6px; margin: 0 6px 0.2em 0; border-radius: 50%; background: var(--uw-glow); vertical-align: middle; }
 .uw-hint { margin: 0 16px 12px; font-size: 12px; color: rgba(255,255,255,.6); text-align: center; }
 .uw-plain { cursor: pointer; user-select: none; }

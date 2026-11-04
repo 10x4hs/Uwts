@@ -6,7 +6,7 @@ import { parseChapters, chapterAt } from '../lib/chapters';
 import { lineIndexAt } from '../lib/lrc';
 import { shiftHue } from '../lib/color';
 import { blurLevel, staggerDelay, scrollOffset, fillTiming, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
-import { segments, unitsToChar, priorOffset, estimateOffset, smoothOffset, isIntro, FillTracker, formatOffset, type Segment } from './align';
+import { segments, unitsToChar, priorOffset, estimateOffset, smoothOffset, isIntro, FillTracker, type Segment } from './align';
 import { VocalTracker } from './audio';
 import { addAnchor, timedLines, parseAnchors, groupByMatch, type Anchor } from './anchors';
 import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, displayTitle, displayArtist, type Action, type PanelState } from './state';
@@ -52,6 +52,8 @@ async function metaInPage(videoId: string): Promise<{ title: string; channel: st
 const offsetKey = (id: string) => `uw:offset:${id}`;
 const anchorKey = (id: string, chapter?: string) => `uw:anchors:${id}#${chapter ?? ''}`;
 const LONG_PRESS_MS = 550;
+/** People tap a moment after they hear a line start; anchor that much earlier. */
+const TAP_REACTION_SEC = 0.2;
 const ESTIMATE_MS = 15000;
 const MIN_COVERAGE = 20;
 let collapsedPref = false;
@@ -154,6 +156,13 @@ class Panel {
   timed: LyricLine[] | null = null;
   anchorSeq = 0;
   resetBtn = el('button', 'uw-btn uw-chip uw-sync-btn uw-reset-btn', '싱크 초기화');
+  // sync mode: one button, then tap the line that is being sung right now
+  syncMode = false;
+  syncBtn = el('button', 'uw-btn uw-chip uw-sync-btn uw-sync-toggle', '싱크 맞추기');
+  syncHint = el('div', 'uw-intro uw-sync-hint');
+  syncHintText = el('span', 'uw-intro-text', '');
+  /** a global offset saved by the old ±0.5s buttons; reset must be able to clear it */
+  offsetStored = false;
   estTimer = 0;
   toastTimer = 0;
   introEl = el('div', 'uw-intro');
@@ -193,29 +202,23 @@ class Panel {
     this.collapseBtn.addEventListener('click', () => this.setCollapsed(!this.root.classList.contains('uw-collapsed'), true));
     header.append(this.thumb, meta, searchBtn, this.collapseBtn);
     const syncRow = el('div', 'uw-sync');
-    // '+' moves the lyrics earlier (ahead), '−' later. syncOffset is subtracted from the video
-    // time, so '+0.5s' means syncOffset − 0.5.
-    for (const [label, d, aria, done] of [
-      ['−0.5s', 0.5, '가사 0.5초 늦추기', '가사를 0.5초 늦췄어요'],
-      ['+0.5s', -0.5, '가사 0.5초 앞당기기', '가사를 0.5초 앞당겼어요'],
-    ] as const) {
-      const b = el('button', 'uw-btn uw-chip uw-sync-btn', label);
-      b.type = 'button';
-      b.setAttribute('aria-label', aria);
-      b.title = aria;
-      b.addEventListener('click', () => this.setManualOffset(this.syncOffset + d, done));
-      syncRow.append(b);
-    }
+    this.syncBtn.type = 'button';
+    this.syncBtn.setAttribute('aria-pressed', 'false');
+    this.syncBtn.title = '누른 뒤 지금 부르고 있는 줄을 눌러 주세요';
+    this.syncBtn.addEventListener('click', () => this.setSyncMode(!this.syncMode));
     this.resetBtn.type = 'button';
     this.resetBtn.hidden = true;
     this.resetBtn.addEventListener('click', () => this.clearAnchors());
-    syncRow.prepend(this.resetBtn);
+    syncRow.append(this.resetBtn, this.syncBtn);
+    this.syncHint.setAttribute('role', 'status');
+    this.syncHint.append(el('span', 'uw-intro-note', '♪'), this.syncHintText);
+    this.syncHint.hidden = true;
     // The intro length is a guess (video longer than the track): never hide the lyrics behind it,
     // show when we expect the song to start and let the user correct it with one tap.
     this.introEl.setAttribute('role', 'status');
     this.introBtn.type = 'button';
     this.introBtn.setAttribute('aria-label', '노래가 지금 시작됐어요. 첫 줄을 지금 시간에 맞추기');
-    this.introBtn.addEventListener('click', () => this.lineSungNow(0));
+    this.introBtn.addEventListener('click', () => { if (this.video) this.lineSungNow(0, this.video.currentTime); });
     this.introEl.append(el('span', 'uw-intro-note', '♪'), this.introText, this.introBtn);
     this.introEl.hidden = true;
     this.toastEl.setAttribute('role', 'status');
@@ -229,7 +232,7 @@ class Panel {
     permBar.append(permBtn);
     void send({ type: 'perm:status' }).then((r) => { if (r.ok && !r.granted) permBar.hidden = false; }).catch(() => {});
     // intro bar sits outside the scrolling/faded lyrics body so it stays crisp
-    this.root.append(this.bg, header, permBar, syncRow, this.introEl, this.body, this.toastEl);
+    this.root.append(this.bg, header, permBar, syncRow, this.syncHint, this.introEl, this.body, this.toastEl);
     // Keep typing inside the panel away from YouTube's global hotkeys (t = theater, f = fullscreen,
     // k/j/l = playback, / = search...), which otherwise fire while the user types a song name.
     for (const type of ['keydown', 'keypress', 'keyup'] as const) {
@@ -238,15 +241,25 @@ class Panel {
         if (t.closest('input, textarea, [contenteditable="true"]')) e.stopPropagation();
       });
     }
+    this.root.addEventListener('keydown', (e) => { if (e.key === 'Escape' && this.syncMode) this.setSyncMode(false); });
     this.setCollapsed(collapsedPref, false);
     let pressTimer = 0;
-    let longPressed = false;
+    let longPressed = false; // also set after a sync-mode tap so the following click doesn't seek
     this.lyricsEl.addEventListener('pointerdown', (e) => {
       const line = (e.target as HTMLElement).closest<HTMLElement>('.uw-line');
       longPressed = false;
       clearTimeout(pressTimer);
-      if (!line?.dataset.index) return;
-      pressTimer = window.setTimeout(() => { longPressed = true; this.lineSungNow(Number(line.dataset.index)); }, LONG_PRESS_MS);
+      if (!line?.dataset.index || !this.video || e.button > 0) return;
+      // the moment of the press is what matters (lines may move before the finger lifts)
+      const at = this.video.currentTime;
+      if (this.syncMode) {
+        longPressed = true;
+        e.preventDefault();
+        this.tapLine(Number(line.dataset.index), at);
+        return;
+      }
+      // hidden shortcut outside sync mode: long-press a line
+      pressTimer = window.setTimeout(() => { longPressed = true; this.lineSungNow(Number(line.dataset.index), at); }, LONG_PRESS_MS);
     });
     const cancelPress = () => clearTimeout(pressTimer);
     this.lyricsEl.addEventListener('pointerup', cancelPress);
@@ -256,6 +269,8 @@ class Panel {
     this.lyricsEl.addEventListener('click', (e) => {
       if (longPressed) { longPressed = false; return; }
       const line = (e.target as HTMLElement).closest<HTMLElement>('.uw-line');
+      // keyboard (Enter/Space) in sync mode
+      if (this.syncMode) { if (line?.dataset.index && this.video) this.tapLine(Number(line.dataset.index), this.video.currentTime); return; }
       const t = line?.dataset.time;
       if (t != null && t !== '' && this.video && Number(t) >= 0) this.video.currentTime = Number(t) + this.chapterStart + this.syncOffset;
     });
@@ -289,6 +304,8 @@ class Panel {
       if (!this.alive || typeof v !== 'number') return;
       this.manualSync = true;
       this.syncOffset = v;
+      this.offsetStored = v !== 0;
+      this.updateReset();
       this.refresh();
     }).catch(() => {});
     this.estTimer = window.setInterval(() => this.autoEstimate(), ESTIMATE_MS);
@@ -314,6 +331,7 @@ class Panel {
   }
 
   setCollapsed(c: boolean, persist: boolean) {
+    if (c && this.syncMode) this.setSyncMode(false);
     this.root.classList.toggle('uw-collapsed', c);
     this.collapseBtn.setAttribute('aria-expanded', String(!c));
     this.collapseBtn.setAttribute('aria-label', c ? '가사 패널 펼치기' : '가사 패널 접기');
@@ -335,6 +353,7 @@ class Panel {
       // different lyrics: anchors (line indices) no longer apply
       if (this.anchors.length) { this.anchors = []; this.manualSync = false; }
       this.anchorSeq++;
+      if (this.syncMode) this.setSyncMode(false);
     }
     this.render();
     if (this.state.result && this.state.result !== prev) this.loadAnchors();
@@ -411,28 +430,53 @@ class Panel {
     this.toastTimer = window.setTimeout(() => this.toastEl.classList.remove('uw-toast-on'), 1400);
   }
 
-  setManualOffset(o: number, message?: string) {
-    this.syncOffset = Math.round(o * 10) / 10;
-    this.manualSync = true;
-    chrome.storage?.local.set({ [offsetKey(this.videoId)]: this.syncOffset }).catch(() => {});
-    this.showToast(message ?? formatOffset(this.syncOffset));
-    this.refresh();
+  /** Sync mode: the next tap on a line means "this line is being sung right now". */
+  setSyncMode(on: boolean) {
+    this.syncMode = on;
+    this.root.classList.toggle('uw-syncmode', on);
+    this.syncBtn.textContent = on ? '완료' : '싱크 맞추기';
+    this.syncBtn.setAttribute('aria-pressed', String(on));
+    const plain = this.state.result?.kind === 'plain';
+    this.syncHintText.textContent = plain
+      ? '지금 부르고 있는 줄을 눌러 주세요 · 두세 곳 맞추면 따라가요'
+      : '지금 부르고 있는 줄을 눌러 주세요';
+    this.syncHint.hidden = !on;
+    if (!on) this.resetManualScroll();
   }
 
-  /** "This line is being sung now": add (or move) a sync anchor on it. */
-  lineSungNow(lineIndex: number) {
+  /** A tap in sync mode. Synced lyrics are fixed by one tap; plain lyrics need two to start following. */
+  tapLine(lineIndex: number, at: number) {
     const res = this.state.result;
-    if (!this.video || !res || !(lineIndex >= 0 && lineIndex < res.lines.length)) return;
-    const videoTime = Math.round((this.video.currentTime - this.chapterStart) * 100) / 100;
+    if (!res) return;
+    this.lineSungNow(lineIndex, at);
+    if (res.kind === 'synced' || this.anchors.length >= 2) this.setSyncMode(false);
+  }
+
+  /** "This line is being sung now" (at video time `at`): add (or move) a sync anchor on it. */
+  lineSungNow(lineIndex: number, at: number) {
+    const res = this.state.result;
+    const v = this.video;
+    if (!v || !res || !(lineIndex >= 0 && lineIndex < res.lines.length)) return;
+    const lag = v.paused ? 0 : TAP_REACTION_SEC * (v.playbackRate || 1);
+    const videoTime = Math.max(0, Math.round((at - lag - this.chapterStart) * 100) / 100);
     this.anchors = addAnchor(this.anchors, { lineIndex, videoTime });
     // anchors replace the global offset; auto-estimation must never override them
     this.syncOffset = 0;
     this.manualSync = true;
+    this.offsetStored = false;
     chrome.storage?.local.remove(offsetKey(this.videoId)).catch(() => {});
     this.saveAnchors();
     const n = this.anchors.length;
-    this.showToast(res.kind === 'plain' && n < 2 ? `싱크 지점 ${n}개 저장됨 · 한 곳 더 맞춰 주세요` : `싱크 지점 ${n}개 저장됨`);
+    this.showToast(res.kind === 'plain'
+      ? (n < 2 ? '1곳 맞췄어요 · 한 곳 더 눌러 주세요' : `${n}곳 맞췄어요 · 노래방처럼 따라가요`)
+      : (n < 2 ? '이 줄에 맞췄어요' : `${n}곳에 맞췄어요`));
     this.render();
+  }
+
+  updateReset() {
+    const show = this.anchors.length > 0 || this.offsetStored;
+    this.resetBtn.hidden = !show;
+    this.root.classList.toggle('uw-has-anchors', this.anchors.length > 0);
   }
 
   anchorStoreKey(): string { return anchorKey(this.videoId, this.lastCtx?.chapterTitle); }
@@ -467,6 +511,8 @@ class Panel {
   clearAnchors() {
     this.anchors = [];
     this.saveAnchors();
+    this.offsetStored = false;
+    chrome.storage?.local.remove(offsetKey(this.videoId)).catch(() => {});
     this.manualSync = false;
     this.autoConfident = false;
     this.syncOffset = 0;
@@ -614,10 +660,17 @@ class Panel {
     this.root.classList.add('uw-manual');
     clearTimeout(this.manualTimer);
     this.manualTimer = window.setTimeout(() => {
-      this.manualOffset = 0;
-      this.lyricsEl.style.setProperty('--uw-m', '0px');
-      this.root.classList.remove('uw-manual');
+      // in sync mode keep where the user scrolled to (they are looking for the sung line)
+      if (this.syncMode) this.root.classList.remove('uw-manual');
+      else this.resetManualScroll();
     }, 3000);
+  }
+
+  resetManualScroll() {
+    clearTimeout(this.manualTimer);
+    this.manualOffset = 0;
+    this.lyricsEl.style.setProperty('--uw-m', '0px');
+    this.root.classList.remove('uw-manual');
   }
 
   burst(line: HTMLElement) {
@@ -925,8 +978,7 @@ class Panel {
     this.timed = (s.status === 'synced' || s.status === 'plain') && s.result ? timedLines(s.result.kind, s.result.lines, this.anchors) : null;
     const synced = !!this.timed;
     this.root.dataset.status = synced ? 'synced' : s.status;
-    this.resetBtn.hidden = !this.anchors.length;
-    this.root.classList.toggle('uw-has-anchors', this.anchors.length > 0);
+    this.updateReset();
     this.introEl.hidden = true;
     this.root.classList.remove('uw-intro-on');
     this.lyricsEl.style.setProperty('--uw-y', '0px');
@@ -938,7 +990,7 @@ class Panel {
       this.lyricsEl.append(sk);
     } else if ((s.status === 'synced' || s.status === 'plain') && s.result) {
       if (s.overridden) this.titleEl.textContent = displayTitle(s.result.title);
-      if (!synced) this.lyricsEl.append(el('p', 'uw-hint', '줄을 길게 눌러 두세 곳만 맞추면 노래방처럼 따라가요'));
+      if (!synced) this.lyricsEl.append(el('p', 'uw-hint', '‘싱크 맞추기’를 누르고, 부르는 줄을 두세 번 눌러 주면 노래방처럼 따라가요'));
       s.result.lines.forEach((line, i) => {
         const p = el('p', 'uw-line uw-future', line.text || '♪');
         p.dataset.index = String(i);

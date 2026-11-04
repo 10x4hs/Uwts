@@ -14,11 +14,12 @@ describe('blurLevel', () => {
 });
 
 describe('staggerDelay', () => {
-  it('staggers lines from the active one by 0.05s', () => {
-    expect(staggerDelay(3, 3, false)).toBe(0.05);
-    expect(staggerDelay(5, 3, false)).toBe(0.15);
+  it('moves the active and finished lines together, then staggers lines below by 0.04s', () => {
+    expect(staggerDelay(3, 3, false)).toBe(0);
+    expect(staggerDelay(2, 3, false)).toBe(0);
+    expect(staggerDelay(5, 3, false)).toBe(0.08);
     expect(staggerDelay(1, 3, false)).toBe(0);
-    expect(staggerDelay(100, 3, false)).toBe(0.4);
+    expect(staggerDelay(100, 3, false)).toBe(0.32);
   });
   it('no stagger on seek', () => expect(staggerDelay(5, 3, true)).toBe(0));
 });
