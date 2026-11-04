@@ -16,6 +16,7 @@ YouTube에서 노래 영상을 볼 때, 그 곡의 가사를 찾으려고 영상
 - LRCLIB (lrclib.net)
 - NetEase Cloud Music (music.163.com)
 - LyricsPlus (lyricsplus.binimum.org): 단어별 노래방 타이밍을 받을 때. 찾은 곡의 제목·가수·길이만 보냅니다.
+- Google 번역 (translate.googleapis.com): 외국어 가사를 한국어로 번역할 때. 가사 줄만 보냅니다. 패널의 번역 버튼으로 끌 수 있습니다.
 - 사용자가 설정에서 직접 켠 경우에만: 벅스, 지니, 멜론
 
 각 서비스가 받은 요청은 해당 서비스의 개인정보처리방침을 따릅니다.
