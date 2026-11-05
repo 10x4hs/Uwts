@@ -28,6 +28,12 @@ describe('splitArtists', () => {
 });
 
 describe('scoreCandidate', () => {
+  it('prefers the original over a Chinese DJ edit of the same song', () => {
+    const ctx = { videoTitle: '[playlist] 위켄드는 전설이다 The Weeknd Playlist', channel: 'x', chapterTitle: 'The Weeknd - Starboy', duration: 230 };
+    const orig = scoreCandidate({ artist: 'The Weeknd, Daft Punk', title: 'Starboy', duration: 230, synced: true }, ctx);
+    const dj = scoreCandidate({ artist: 'The Weeknd, Daft Punk', title: 'Starboy (DJ小瑞、DJ小姚版)', duration: 230, synced: true }, ctx);
+    expect(orig).toBeGreaterThan(dj);
+  });
   const fasho = v('GroovyRoom - FASHO (Feat. pH-1, HAON) [Official Video]', 'GroovyRoom', 430);
   it('high score for title + artist + duration', () => {
     expect(scoreCandidate({ artist: 'GroovyRoom, pH-1', title: 'FASHO', duration: 424, synced: true }, fasho)).toBeGreaterThanOrEqual(HIGH_SCORE);
