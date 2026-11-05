@@ -8,7 +8,8 @@ import type { KrLyrics, KrSong, KrSource } from './kr';
 
 /** LyricsResult plus metadata; extra fields survive runtime messaging. */
 export type Candidate = LyricsResult & { duration?: number; source: 'lrclib' | 'netease' | KrSource; score?: number };
-export interface Resolved { result: Candidate | null; candidates: Candidate[]; query: SongQuery; partial?: boolean }
+/** picked: the result is the user's own choice for this song (never second-guessed). */
+export interface Resolved { result: Candidate | null; candidates: Candidate[]; query: SongQuery; partial?: boolean; picked?: boolean }
 
 const DAY = 24 * 3600 * 1000;
 const TTL_MS = 7 * DAY;
@@ -173,7 +174,7 @@ export async function resolveCached(ctx: ResolveContext, deps: ResolveDeps = def
   const fresh = hit && Date.now() - hit.at < (hit.v.partial ? PARTIAL_TTL_MS : hit.v.result ? TTL_MS : NULL_TTL_MS);
   if (override?.lines?.length) {
     const base = fresh ? hit.v : { candidates: [], query: { artist: override.artist, title: override.title } };
-    return { ...base, result: override };
+    return { ...base, result: override, picked: true };
   }
   if (fresh && !opts.fresh) return hit.v;
   const v = await resolveFresh(ctx, deps);

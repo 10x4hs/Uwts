@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { parseLrc } from '../lib/lrc';
 import type { LyricLine } from '../shared/types';
-import { alignToTranscript, normalizeWords, type TranscriptSeg } from './asr';
+import { captionWordCount, captionLyrics, alignToTranscript, normalizeWords, type TranscriptSeg } from './asr';
 import panel from '../fixtures/xmas/timeline-panel.json';
 import winter from '../fixtures/xmas/winter-wonderland.lrclib.json';
 import home from '../fixtures/xmas/ill-be-home.lrclib.json';
@@ -147,5 +147,24 @@ describe('alignToTranscript: synthetic', () => {
     alignToTranscript(lines.map((l) => ({ ...l, time: -1 })), big, { start: 0, end: 1200 });
     // generous: CI runners are several times slower than a laptop; this only guards against blow-ups
     expect(performance.now() - t0).toBeLessThan(500);
+  });
+});
+
+describe('captions as lyrics', () => {
+  const segs = [
+    { time: 727, text: '[music] Now I keep peace with the scar.' },
+    { time: 730, text: "We don't erase the trembling. We just learn where the triggers are." },
+    { time: 757, text: '[music]' },
+    { time: 900, text: 'outside the window' },
+  ];
+  test('counts sung words only', () => {
+    expect(captionWordCount(segs, { start: 700, end: 800 })).toBe(19);
+  });
+  test('splits segments into timed sentences relative to the song start', () => {
+    expect(captionLyrics(segs, { start: 700, end: 800 }, 720)).toEqual([
+      { time: 7, text: 'Now I keep peace with the scar' },
+      { time: 10, text: "We don't erase the trembling" },
+      { time: 15.27, text: 'We just learn where the triggers are' },
+    ]);
   });
 });

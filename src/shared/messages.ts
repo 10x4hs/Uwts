@@ -19,7 +19,7 @@ export type Response<R extends Request> =
   R extends { type: 'perm:open' } ? { ok: true } :
   R extends { type: 'lyrics:words' } ? { ok: true; lines: LyricLine[] | null } | { ok: false; error: string } :
   R extends { type: 'update:status' } ? { ok: true; current: string; latest?: string; url?: string } :
-  R extends { type: 'lyrics:resolve' } ? { ok: true; result: LyricsResult | null; candidates: LyricsResult[]; query: SongQuery } | { ok: false; error: string } :
+  R extends { type: 'lyrics:resolve' } ? { ok: true; result: LyricsResult | null; candidates: LyricsResult[]; query: SongQuery; picked?: boolean } | { ok: false; error: string } :
   R extends { type: 'video:meta' } ? { ok: true; title: string; channel: string; description?: string; duration?: number } | { ok: false; error: string } : never;
 
 /** A lyrics:search result; `match` groups exact hits above a "비슷한 결과" divider. */

@@ -8,8 +8,9 @@ function toSec(s: string): number {
   return s.split(':').map(Number).reduce((a, n) => a * 60 + n, 0);
 }
 
-function cleanTitle(s: string): string {
-  return s.replace(/^[\s\-–—|:.]+|[\s\-–—|:]+$/g, '').trim();
+/** Leading repeats of the timestamp ("03:41  Overflow Heart Mode") and separators go. */
+export function cleanTitle(s: string): string {
+  return s.replace(/^(?:[\s\-–—|:.]*\[?\(?(?:\d{1,2}:)?\d{1,2}:\d{2}\)?\]?)+/, '').replace(/^[\s\-–—|:.]+|[\s\-–—|:]+$/g, '').trim();
 }
 
 /** Parse "0:00 Title" / "1:02:03 Title" lines from a description. Returns [] if fewer than 2 found. */
@@ -52,4 +53,18 @@ export function songListChapters(chapters: Chapter[], duration?: number): Chapte
   const lens = chapters.slice(0, -1).map((c, i) => (c.end ?? chapters[i + 1].start) - c.start).sort((a, b) => a - b);
   const median = lens[Math.floor(lens.length / 2)];
   return median < SONG_MIN_SEC ? [] : chapters;
+}
+
+/**
+ * The last listed song can't run to the end of a much longer video (a 46-minute list in an 11-hour
+ * loop video): end it after a typical song length so the rest counts as "no song info".
+ */
+export function capLastChapter(chapters: Chapter[], duration?: number): Chapter[] {
+  if (chapters.length < 2 || !duration) return chapters;
+  const last = chapters[chapters.length - 1];
+  if (last.end != null) return chapters;
+  const lens = chapters.slice(1).map((c, i) => c.start - chapters[i].start);
+  const avg = lens.reduce((a, b) => a + b, 0) / lens.length;
+  const end = last.start + Math.max(300, avg * 1.6);
+  return end < duration ? [...chapters.slice(0, -1), { ...last, end: Math.round(end) }] : chapters;
 }
