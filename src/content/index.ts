@@ -1279,12 +1279,15 @@ class Panel {
    * synced by hand (their anchors point at line indices of the current lyrics).
    */
   async upgradeWords(result: LyricsResult | null, seq: number) {
-    if (!result || result.kind !== 'synced' || result.lines.some((l) => l.words?.length)) return;
+    if (!result || result.kind !== 'synced' || result.lines.some((l) => l.singer)) return;
+    // already word-timed (NetEase): still look, but only take LyricsPlus for its duet singer marks
+    const hasWords = result.lines.some((l) => l.words?.length);
     const d = (result as Cand).duration;
     const res = await send({ type: 'lyrics:words', artist: result.artist, title: result.title, duration: d,
       lines: result.lines.map((l) => ({ time: l.time, text: l.text })) }).catch(() => null);
     if (!res?.ok || !res.lines || seq !== this.reqSeq || !this.alive) return;
     if (this.state.result !== result || this.manualSync || this.anchors.length) return;
+    if (hasWords && !res.lines.some((l) => l.singer)) return;
     this.dispatch({ type: 'loaded', result: { ...result, lines: res.lines } });
     this.applyAsr();
     this.refresh();
@@ -1521,6 +1524,7 @@ class Panel {
         // (row 1 first, then row 2) instead of every row filling to the same x at once
         p.append(el('span', 'uw-text', line.text || '♪'));
         p.dataset.index = String(i);
+        if (line.singer) p.dataset.singer = String(line.singer);
         if (this.anchors.some((a) => a.lineIndex === i)) p.classList.add('uw-anchored');
         if (synced) {
           p.dataset.time = String(this.timed![i].time);
