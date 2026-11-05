@@ -322,3 +322,10 @@
 .uw-collapsed .uw-resize { display: none; }
 .uw-resizing, .uw-resizing * { user-select: none; }
 .uw-resizing .uw-line { transition: none; }
+
+/* ---------- fullscreen: float on the right of the video ---------- */
+.uw-panel.uw-fs {
+  position: fixed; z-index: 2147483647; top: 50%; right: 32px; margin: 0;
+  transform: translateY(-50%); max-height: 90vh;
+}
+.uw-fs .uw-body { height: min(var(--uw-h, 440px), calc(90vh - 90px)); }

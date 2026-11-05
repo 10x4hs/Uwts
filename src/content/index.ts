@@ -425,6 +425,9 @@ class Panel {
     const onVis = () => this.updatePaused();
     document.addEventListener('visibilitychange', onVis);
     this.disposers.push(() => document.removeEventListener('visibilitychange', onVis));
+    const onFs = () => this.onFullscreen();
+    document.addEventListener('fullscreenchange', onFs);
+    this.disposers.push(() => document.removeEventListener('fullscreenchange', onFs));
   }
 
   destroyed = false;
@@ -441,10 +444,27 @@ class Panel {
     return true;
   }
 
+  /** In fullscreen the browser draws only the fullscreen element: float the panel inside it, on the
+   *  right, and put it back in the side column when fullscreen ends. */
+  onFullscreen() {
+    const fs = document.fullscreenElement;
+    if (fs && fs.querySelector('video')) {
+      fs.append(this.root);
+      this.root.classList.add('uw-fs');
+    } else if (this.root.classList.contains('uw-fs')) {
+      this.root.classList.remove('uw-fs');
+      this.root.remove();
+      this.rehost();
+    }
+    if (this.timed && this.tracksEl.hidden) requestAnimationFrame(() => this.follow());
+  }
+
   mount(): boolean {
     const host = document.querySelector('#secondary-inner') ?? document.querySelector('#secondary');
     if (!host) return false;
     host.prepend(this.root);
+    // next video while still fullscreen (playlist autoplay): show up over the video right away
+    if (document.fullscreenElement) this.onFullscreen();
     // The extension was reloaded/updated under this tab: this script is orphaned and every chrome.*
     // call throws. Say so instead of leaving an empty panel.
     if (!extensionAlive()) { this.dispatch({ type: 'failed', error: UPDATED_ERROR }); return true; }
