@@ -26,3 +26,10 @@ describe('KR parsers', () => {
     expect(plainLines('a<BR>b<BR><BR>c')).toEqual([{ time: -1, text: 'a' }, { time: -1, text: 'b' }, { time: -1, text: 'c' }]);
   });
 });
+
+import { delayLines, SOURCE_LEAD } from './types';
+describe('source lead', () => {
+  it('moves Bugs lines to the sung onset and leaves plain lines alone', () => {
+    expect(delayLines([{ time: 11.6, text: 'a' }, { time: -1, text: 'b' }], SOURCE_LEAD.bugs)).toEqual([{ time: 11.95, text: 'a' }, { time: -1, text: 'b' }]);
+  });
+});

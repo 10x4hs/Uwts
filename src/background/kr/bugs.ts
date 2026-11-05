@@ -1,5 +1,5 @@
 import { getText } from '../http';
-import { mmss, plainLines, type KrLyrics, type KrSong } from './types';
+import { mmss, plainLines, delayLines, SOURCE_LEAD, type KrLyrics, type KrSong } from './types';
 
 /**
  * Bugs (unofficial). Search: m.bugs.co.kr/api/getSearchList (JSON, no auth).
@@ -30,7 +30,7 @@ export async function bugsLyrics(song: KrSong): Promise<KrLyrics | null> {
   const base = { artist: song.artist, title: song.title, duration: song.duration, source: 'bugs' as const };
   const t = JSON.parse(await getText(`https://music.bugs.co.kr/player/lyrics/T/${encodeURIComponent(song.id)}`, 'Bugs')) as { lyrics?: string };
   const synced = parseBugsSynced(t.lyrics ?? '');
-  if (synced.length >= 3) return { ...base, kind: 'synced', lines: synced };
+  if (synced.length >= 3) return { ...base, kind: 'synced', lines: delayLines(synced, SOURCE_LEAD.bugs) };
   const n = JSON.parse(await getText(`https://music.bugs.co.kr/player/lyrics/N/${encodeURIComponent(song.id)}`, 'Bugs')) as { lyrics?: string };
   const plain = plainLines(n.lyrics ?? '');
   return plain.length ? { ...base, kind: 'plain', lines: plain } : null;
