@@ -642,7 +642,7 @@ class Panel {
     if (this.introEl.hidden === intro) this.introEl.hidden = !intro;
     if (intro && lines.length) {
       const left = Math.max(0, Math.round(lines[0].time - lt));
-      const txt = `노래 시작 전 · 약 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} 후`;
+      const txt = left >= BREAK_MIN_SEC ? '노래 시작 전이에요' : `노래 시작 전 · 약 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} 후`;
       if (this.introText.textContent !== txt) this.introText.textContent = txt;
     }
     this.setCurrent(lineIndexAt(lines, lt));
@@ -666,11 +666,23 @@ class Panel {
         p = (lt - end) / gap;
         left = next.time - lt;
       }
+    } else if (i < 0 && lines[0] && !this.syncMode) {
+      // before the first line (the intro): count down from the song's start to the first line
+      const first = lines[0].time;
+      if (first >= BREAK_MIN_SEC && lt < first - BREAK_EXIT_SEC) {
+        show = true;
+        p = Math.max(0, lt) / first;
+        left = first - lt;
+      }
     }
-    const cur = this.lineEls[i];
-    if (show && cur && this.breakEl.parentElement !== cur) {
+    // in a pause the wave sits under the line just sung; in the intro, above the first line
+    const intro = i < 0;
+    const cur = this.lineEls[intro ? 0 : i];
+    if (show && cur && (this.breakEl.parentElement !== cur || this.breakEl.classList.contains('uw-break-intro') !== intro)) {
       this.breakEl.classList.remove('uw-break-on');
-      cur.append(this.breakEl);
+      this.breakEl.classList.toggle('uw-break-intro', intro);
+      if (intro) cur.prepend(this.breakEl); else cur.append(this.breakEl);
+      if (intro) cur.style.setProperty('--blur', '0px'); // the first line is a "future" line: keep the wave sharp
       void this.breakEl.offsetWidth; // start collapsed so it grows open
     }
     if (show !== this.breakOn) { this.breakOn = show; this.breakEl.classList.toggle('uw-break-on', show); }
