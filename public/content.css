@@ -327,10 +327,22 @@
 .uw-resizing, .uw-resizing * { user-select: none; }
 .uw-resizing .uw-line { transition: none; }
 
-/* ---------- fullscreen: float on the right of the video ---------- */
+/* ---------- fullscreen: a full-height lyrics column docked on the right ---------- */
 .uw-panel.uw-fs {
-  position: fixed; z-index: 2147483647; top: 50%; right: 32px; margin: 0;
-  transform: translateY(-50%); max-height: 90vh;
+  position: fixed; z-index: 2147483647; top: 12px; bottom: 12px; right: 12px; margin: 0;
+  width: var(--uw-dock-w, 400px); max-width: calc(100vw - 24px);
+  display: flex; flex-direction: column;
 }
-.uw-fs .uw-body { height: min(var(--uw-h, 440px), calc(90vh - 90px)); }
+.uw-fs .uw-body { height: auto; flex: 1 1 auto; min-height: 0; }
+.uw-fs .uw-resize { display: none; }
+.uw-panel.uw-fs-hidden { display: none; }
+/* the video makes room for the column (YouTube re-measures on resize) */
+html.uw-fs-dock ytd-watch-flexy[fullscreen] #player-full-bleed-container,
+html.uw-fs-dock ytd-watch-flexy[fullscreen] #full-bleed-container {
+  width: calc(100% - var(--uw-dock-w, 400px) - 24px) !important;
+}
+/* our toggle in YouTube's fullscreen quick-action row */
+.uw-fs-btn svg { width: 24px; height: 24px; }
+.uw-fs-btn[aria-pressed='true'] { color: #fff; }
+.uw-fs-btn[aria-pressed='false'] { opacity: .7; }
 .uw-break.uw-break-intro.uw-break-on { margin-top: 0; margin-bottom: 18px; }
