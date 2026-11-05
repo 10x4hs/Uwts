@@ -288,6 +288,13 @@
 .uw-listing .uw-body { overflow-y: auto; scrollbar-width: none; overscroll-behavior: contain; mask-image: none; -webkit-mask-image: none; }
 .uw-listing .uw-body::-webkit-scrollbar { display: none; }
 .uw-tracks { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 16px; margin: 0 -12px; }
+.uw-track-row { display: flex; align-items: center; gap: 4px; }
+.uw-track-row > .uw-track { flex: 1 1 auto; min-width: 0; }
+.uw-panel .uw-track-find { flex: none; width: 34px; height: 34px; min-width: 34px; min-height: 34px; opacity: .55; }
+.uw-track-row:hover .uw-track-find, .uw-track-find:focus-visible { opacity: 1; }
+.uw-track-picked { align-self: flex-start; margin-top: 2px; padding: 1px 6px; border-radius: 6px; font-size: 10px; font-weight: 700; color: #111 !important; background: var(--uw-glow); }
+.uw-search-target { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: #fff; }
+.uw-search-target[hidden] { display: none; }
 .uw-track {
   display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 10px;
   min-height: 52px; padding: 6px 10px; border: 0; border-radius: 12px; background: none; color: #fff;
