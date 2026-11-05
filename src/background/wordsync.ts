@@ -12,8 +12,15 @@ const TTL_MS = 7 * 24 * 3600 * 1000;
 const MISS_TTL_MS = 24 * 3600 * 1000;
 
 interface Syl { time: number; duration: number; text: string; isBackground?: boolean }
-interface LpLine { time: number; duration: number; text: string; syllabus?: Syl[] }
+interface LpLine { time: number; duration: number; text: string; syllabus?: Syl[]; element?: { singer?: string } }
 export interface LyricsPlus { type?: string; lyrics?: LpLine[] }
+
+/** Apple Music agents: v1 = first singer, v1000 = everyone together, any other vN = another singer. */
+function singerOf(l: LpLine): 1 | 2 | 3 | undefined {
+  const s = l.element?.singer;
+  if (!s) return undefined;
+  return s === 'v1' ? 1 : s === 'v1000' ? 3 : /^v\d+$/.test(s) ? 2 : undefined;
+}
 
 function toLine(l: LpLine): LyricLine | null {
   const syl = (l.syllabus ?? []).filter((s) => s.text);
@@ -34,13 +41,17 @@ function toLine(l: LpLine): LyricLine | null {
     text += chunk;
   }
   text = text.trimEnd();
-  return text ? { time: Math.min(l.time, parts[0].time) / 1000, text, words } : null;
+  const singer = singerOf(l);
+  return text ? { time: Math.min(l.time, parts[0].time) / 1000, text, words, ...(singer ? { singer } : {}) } : null;
 }
 
 export function parseLyricsPlus(d: LyricsPlus): LyricLine[] | null {
   if (d.type !== 'Word' || !d.lyrics?.length) return null;
   const lines = d.lyrics.map(toLine).filter((l): l is LyricLine => !!l);
-  return lines.length >= 3 ? lines.sort((a, b) => a.time - b.time) : null;
+  if (lines.length < 3) return null;
+  // one singer throughout (solo songs, and groups: Apple tags every member as v1) = no colours
+  if (new Set(lines.map((l) => l.singer ?? 1)).size < 2) for (const l of lines) delete l.singer;
+  return lines.sort((a, b) => a.time - b.time);
 }
 
 const norm = (s: string) => s.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
@@ -94,7 +105,7 @@ export async function wordSyncEnabled(): Promise<boolean> {
  */
 export async function wordSyncFor(q: { artist: string; title: string; duration?: number }, lines: LyricLine[]): Promise<LyricLine[] | null> {
   if (!(await wordSyncEnabled())) return null;
-  const key = `ws:v1:${norm(q.artist)}|${norm(q.title)}`;
+  const key = `ws:v2:${norm(q.artist)}|${norm(q.title)}`;
   const got = (await chrome.storage.local.get(key).catch(() => ({})) as Record<string, { at: number; v: LyricLine[] | null }>)[key];
   let v: LyricLine[] | null;
   if (got && Date.now() - got.at < (got.v ? TTL_MS : MISS_TTL_MS)) v = got.v;
