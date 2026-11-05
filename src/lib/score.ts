@@ -97,10 +97,17 @@ export function scoreCandidate(c: ScoreInput, ctx: ScoreContext): number {
   // version markers on the candidate (remix, inst, sped up...) that the video doesn't mention
   const VERSION = /\b(remix|inst|instrumental|mr|sped\s*up|slowed|acoustic|live|ver|version|cover|karaoke|english|japanese|jp)\b|버전/gi;
   const videoAll = normText(`${ctx.videoTitle} ${ctx.chapterTitle ?? ''}`);
-  const extra = (normText(c.title).match(VERSION) ?? []).filter((w) => !` ${videoAll} `.includes(` ${w} `)).length;
+  let extra = (normText(c.title).match(VERSION) ?? []).filter((w) => !` ${videoAll} `.includes(` ${w} `)).length;
+  // Chinese DJ/remix/sped-up edits ("Starboy (DJ小瑞、DJ小姚版)"): a different, faster arrangement
+  if (CN_EDIT.test(c.title) && !CN_EDIT.test(`${ctx.videoTitle} ${ctx.chapterTitle ?? ''}`)) extra++;
+  else if (hanAside(c.title) && !/\p{Script=Han}/u.test(`${ctx.videoTitle} ${ctx.chapterTitle ?? ''}`)) extra++;
   const s = 0.5 * title - (extra ? 0.2 : 0) + 0.3 * artist + 0.15 * dur + ((c.synced ?? c.kind === 'synced') ? 0.05 : 0);
   return Math.round(s * 1000) / 1000;
 }
+
+const CN_EDIT = /\bdj\b|dj版|版\)|版）|加速|降速|伴奏|翻唱|抖音|remix版/i;
+/** A bracketed note in Chinese characters after the title: "(DJ小瑞版)", "（抖音版）". */
+const hanAside = (t: string) => /[(（][^)）]*\p{Script=Han}[^)）]*[)）]/u.test(t);
 
 export function rank<T extends ScoreInput>(cands: T[], ctx: ScoreContext): { item: T; score: number }[] {
   return cands.map((item) => ({ item, score: scoreCandidate(item, ctx) }))
