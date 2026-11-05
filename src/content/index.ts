@@ -205,6 +205,9 @@ class Panel {
   searchEl = el('div', 'uw-searchpanel');
   searchInput = el('input', 'uw-search-input');
   searchStatus = el('p', 'uw-search-status');
+  /** which song a search is for, when it's not the one playing (song-list search) */
+  searchFor: number | null = null;
+  searchTarget = el('p', 'uw-search-target');
   resultsEl = el('ul', 'uw-results');
   searchTimer = 0;
   searchSeq = 0;
@@ -809,7 +812,6 @@ class Panel {
       const { title, artist } = splitChapter(c.title);
       const b = el('button', `uw-track${i === now ? ' uw-track-on' : ''}`);
       b.type = 'button';
-      b.setAttribute('role', 'listitem');
       const no = el('span', 'uw-track-no');
       no.append(el('span', 'uw-track-num', String(i + 1)));
       const eq = el('span', 'uw-track-eq');
@@ -823,15 +825,29 @@ class Panel {
       b.setAttribute('aria-label', `${i + 1}번 ${title}${artist ? `, ${artist}` : ''}, ${clock(c.start)}부터`);
       if (i === now) b.setAttribute('aria-current', 'true');
       b.addEventListener('click', () => this.pickTrack(i));
-      return b;
+      const find = el('button', 'uw-btn uw-chip uw-track-find');
+      find.type = 'button';
+      find.setAttribute('aria-label', `${title} 가사 직접 찾기`);
+      find.title = '이 곡 가사 직접 찾기';
+      find.append(icon(ICON_SEARCH));
+      find.addEventListener('click', () => this.openSearchFor(i));
+      const row = el('div', 'uw-track-row');
+      row.setAttribute('role', 'listitem');
+      row.dataset.key = overrideKey(this.videoId, c.title);
+      row.append(b, find);
+      return row;
     });
     this.tracksEl.replaceChildren(...rows);
+    // mark songs whose lyrics were picked by hand
+    chrome.storage?.local.get(rows.map((r) => r.dataset.key!)).then((got) => {
+      for (const r of rows) if (got[r.dataset.key!]) r.querySelector('.uw-track-txt b')?.after(el('span', 'uw-track-picked', '직접 고름'));
+    }).catch(() => {});
     this.tracksEl.hidden = false;
     this.root.classList.add('uw-listing');
     this.tracksBtn.setAttribute('aria-pressed', 'true');
     const cur = rows[Math.max(0, now)];
     this.body.scrollTop = Math.max(0, cur.offsetTop - this.body.clientHeight / 2 + cur.offsetHeight / 2);
-    (now >= 0 ? cur : rows[0]).focus({ preventScroll: true });
+    (now >= 0 ? cur : rows[0]).querySelector<HTMLElement>('.uw-track')?.focus({ preventScroll: true });
   }
 
   closeTracks() {
@@ -1485,11 +1501,13 @@ class Panel {
     // keep keystrokes away from YouTube shortcuts
     input.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') this.closeSearch(); });
     this.searchStatus.setAttribute('role', 'status');
-    this.searchEl.append(form, this.searchStatus, this.resultsEl);
+    this.searchTarget.hidden = true;
+    this.searchEl.append(this.searchTarget, form, this.searchStatus, this.resultsEl);
   }
 
   openSearch(focus: boolean) {
     this.closeTracks();
+    if (this.searchFor !== null) { this.searchFor = null; this.searchTarget.hidden = true; this.searchEl.hidden = true; }
     const q = this.bestQuery ?? this.state.query;
     const wasHidden = this.searchEl.hidden;
     this.searchEl.hidden = false;
@@ -1505,7 +1523,30 @@ class Panel {
     if (focus) this.searchInput.focus({ preventScroll: true });
   }
 
+  /** Search lyrics for song i of the list. For the song playing now that's the normal search;
+   *  for another song the pick is saved for that song only, ready when the video gets there. */
+  openSearchFor(i: number) {
+    const c = this.chapters[i];
+    if (!c) return;
+    const now = chapterAt(this.chapters, this.video?.currentTime ?? 0)?.index ?? -1;
+    this.closeTracks();
+    if (i === now) { this.openSearch(true); return; }
+    const { title, artist } = splitChapter(c.title);
+    this.searchFor = i;
+    this.searchTarget.textContent = `${i + 1}번 곡 '${title}'에 붙일 가사를 골라 주세요`;
+    this.searchTarget.hidden = false;
+    this.searchEl.hidden = false;
+    this.root.classList.add('uw-searching');
+    this.searchInput.value = `${artist} ${title}`.trim();
+    this.renderResults([], '검색 중…');
+    this.body.scrollTop = 0;
+    this.searchInput.focus({ preventScroll: true });
+    void this.search(this.searchInput.value);
+  }
+
   closeSearch() {
+    this.searchFor = null;
+    this.searchTarget.hidden = true;
     clearTimeout(this.searchTimer);
     this.searchSeq++;
     this.searchEl.hidden = true;
@@ -1568,6 +1609,15 @@ class Panel {
   }
 
   choose(r: Cand) {
+    const target = this.searchFor !== null ? this.chapters[this.searchFor] : null;
+    if (target && this.searchFor !== this.chapterIndex) {
+      // lyrics for a later (or earlier) song: save them for that song, keep playing this one
+      const n = this.searchFor! + 1;
+      this.closeSearch();
+      chrome.storage?.local.set({ [overrideKey(this.videoId, target.title)]: r }).catch(() => { /* quota */ });
+      this.showToast(`${n}번 곡에 '${displayTitle(r.title)}' 가사를 붙였어요`);
+      return;
+    }
     this.reqSeq++; // drop any in-flight resolve
     clearTimeout(this.retryTimer);
     this.closeSearch();
