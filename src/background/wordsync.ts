@@ -13,16 +13,24 @@ const MISS_TTL_MS = 24 * 3600 * 1000;
 
 interface Syl { time: number; duration: number; text: string; isBackground?: boolean }
 interface LpLine { time: number; duration: number; text: string; syllabus?: Syl[]; element?: { singer?: string } }
-export interface LyricsPlus { type?: string; lyrics?: LpLine[] }
+interface Agent { type?: string }
+export interface LyricsPlus { type?: string; lyrics?: LpLine[]; metadata?: { agents?: Record<string, Agent> } }
 
-/** Apple Music agents: v1 = first singer, v1000 = everyone together, any other vN = another singer. */
-function singerOf(l: LpLine): 1 | 2 | 3 | undefined {
-  const s = l.element?.singer;
-  if (!s) return undefined;
-  return s === 'v1' ? 1 : s === 'v1000' ? 3 : /^v\d+$/.test(s) ? 2 : undefined;
+/** Apple Music agents: a "group" agent (often v1000, sometimes v3) is everyone together; of the
+ *  people, the first to sing is singer 1 and anyone else singer 2. */
+function singerMap(d: LyricsPlus): (singer?: string) => 1 | 2 | 3 | undefined {
+  const agents = d.metadata?.agents ?? {};
+  const order: string[] = [];
+  for (const l of d.lyrics ?? []) {
+    const s = l.element?.singer;
+    if (s && !order.includes(s)) order.push(s);
+  }
+  const group = (s: string) => agents[s]?.type === 'group' || (!agents[s] && s === 'v1000');
+  const first = order.find((s) => !group(s));
+  return (s) => (!s ? undefined : group(s) ? 3 : s === first ? 1 : 2);
 }
 
-function toLine(l: LpLine): LyricLine | null {
+function toLine(l: LpLine, who: (singer?: string) => 1 | 2 | 3 | undefined): LyricLine | null {
   const syl = (l.syllabus ?? []).filter((s) => s.text);
   const main = syl.filter((s) => !s.isBackground);
   const bg = syl.filter((s) => s.isBackground);
@@ -41,13 +49,14 @@ function toLine(l: LpLine): LyricLine | null {
     text += chunk;
   }
   text = text.trimEnd();
-  const singer = singerOf(l);
+  const singer = who(l.element?.singer);
   return text ? { time: Math.min(l.time, parts[0].time) / 1000, text, words, ...(singer ? { singer } : {}) } : null;
 }
 
 export function parseLyricsPlus(d: LyricsPlus): LyricLine[] | null {
   if (d.type !== 'Word' || !d.lyrics?.length) return null;
-  const lines = d.lyrics.map(toLine).filter((l): l is LyricLine => !!l);
+  const who = singerMap(d);
+  const lines = d.lyrics.map((l) => toLine(l, who)).filter((l): l is LyricLine => !!l);
   if (lines.length < 3) return null;
   // one singer throughout (solo songs, and groups: Apple tags every member as v1) = no colours
   if (new Set(lines.map((l) => l.singer ?? 1)).size < 2) for (const l of lines) delete l.singer;
@@ -105,7 +114,7 @@ export async function wordSyncEnabled(): Promise<boolean> {
  */
 export async function wordSyncFor(q: { artist: string; title: string; duration?: number }, lines: LyricLine[]): Promise<LyricLine[] | null> {
   if (!(await wordSyncEnabled())) return null;
-  const key = `ws:v2:${norm(q.artist)}|${norm(q.title)}`;
+  const key = `ws:v3:${norm(q.artist)}|${norm(q.title)}`;
   const got = (await chrome.storage.local.get(key).catch(() => ({})) as Record<string, { at: number; v: LyricLine[] | null }>)[key];
   let v: LyricLine[] | null;
   if (got && Date.now() - got.at < (got.v ? TTL_MS : MISS_TTL_MS)) v = got.v;

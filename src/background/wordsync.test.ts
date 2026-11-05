@@ -39,4 +39,9 @@ describe('LyricsPlus singers', () => {
   it('the aespa fixture is all v1, so it has no colours', () => {
     expect(parseLyricsPlus(fixture as never)!.some((l) => l.singer)).toBe(false);
   });
+  it('uses the agent type: a group agent is "together", whatever its id', () => {
+    const lines = parseLyricsPlus({ type: 'Word', metadata: { agents: { v1: { type: 'person' }, v2: { type: 'person' }, v3: { type: 'group' } } },
+      lyrics: [ln(0, 'a', 'v1'), ln(2000, 'b', 'v2'), ln(4000, 'c', 'v3')] })!;
+    expect(lines.map((l) => l.singer)).toEqual([1, 2, 3]);
+  });
 });
