@@ -1,7 +1,6 @@
 # Youtube Web exTenSion
 
-<img width="1450" height="832" alt="image" src="https://github.com/user-attachments/assets/0ac21881-8fba-4768-b683-b06293d1ea38" />
-
+<img width="1666" height="995" alt="image" src="https://github.com/user-attachments/assets/4b1df667-d6b6-4dbf-a662-3583ca91e71c" />
 
 ## Download 작업하세요 with **Aside**
 
