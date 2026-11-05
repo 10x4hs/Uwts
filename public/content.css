@@ -333,3 +333,4 @@
   transform: translateY(-50%); max-height: 90vh;
 }
 .uw-fs .uw-body { height: min(var(--uw-h, 440px), calc(90vh - 90px)); }
+.uw-break.uw-break-intro.uw-break-on { margin-top: 0; margin-bottom: 18px; }
