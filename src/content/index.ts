@@ -33,6 +33,9 @@ function videoIdFromUrl(): string | null {
 // ---------- page metadata ----------
 const COLLAPSE_KEY = 'uw:collapsed';
 const SIZE_KEY = 'uw:size';
+const FS_KEY = 'uw:fsPanel';
+/** Width of the lyrics column docked beside the video in fullscreen. */
+const DOCK_W = 400;
 const MIN_W = 300;
 const MIN_H = 220;
 const SIZE_STEP = 20;
@@ -273,6 +276,10 @@ class Panel {
   introBtn = el('button', 'uw-btn uw-chip uw-intro-btn', '지금 시작됐어요');
   toastEl = el('div', 'uw-toast');
   resizeEl = el('button', 'uw-resize');
+  /** fullscreen: our toggle in YouTube's quick-action row, and whether the lyrics column is shown */
+  fsBtn: HTMLButtonElement | null = null;
+  fsShown = true;
+  fsWasCollapsed = false;
   size: { w: number; h: number } | null = null;
 
   constructor(videoId: string, token: number) {
@@ -304,7 +311,10 @@ class Panel {
     searchBtn.addEventListener('click', () => this.showSearch());
     this.collapseBtn.type = 'button';
     this.collapseBtn.append(icon(ICON_CHEVRON));
-    this.collapseBtn.addEventListener('click', () => this.setCollapsed(!this.root.classList.contains('uw-collapsed'), true));
+    this.collapseBtn.addEventListener('click', () => {
+      if (this.root.classList.contains('uw-fs')) { this.setFsShown(false, true); return; }
+      this.setCollapsed(!this.root.classList.contains('uw-collapsed'), true);
+    });
     this.tracksBtn.type = 'button';
     this.tracksBtn.hidden = true;
     this.tracksBtn.setAttribute('aria-label', '곡 목록');
@@ -444,19 +454,82 @@ class Panel {
     return true;
   }
 
-  /** In fullscreen the browser draws only the fullscreen element: float the panel inside it, on the
-   *  right, and put it back in the side column when fullscreen ends. */
+  /** In fullscreen the browser draws only the fullscreen element: dock the panel inside it as a
+   *  full-height column on the right (the video shrinks beside it, like YouTube's own side panels),
+   *  and put it back in the side column when fullscreen ends. */
   onFullscreen() {
     const fs = document.fullscreenElement;
     if (fs && fs.querySelector('video')) {
+      if (!this.root.classList.contains('uw-fs')) {
+        this.fsWasCollapsed = this.root.classList.contains('uw-collapsed');
+        if (this.fsWasCollapsed) this.setCollapsed(false, false);
+      }
       fs.append(this.root);
       this.root.classList.add('uw-fs');
+      this.ensureFsButton();
+      this.applyFsDock();
     } else if (this.root.classList.contains('uw-fs')) {
-      this.root.classList.remove('uw-fs');
+      this.root.classList.remove('uw-fs', 'uw-fs-hidden');
       this.root.remove();
       this.rehost();
+      if (this.fsWasCollapsed) this.setCollapsed(true, false);
+      this.applyFsDock();
     }
     if (this.timed && this.tracksEl.hidden) requestAnimationFrame(() => this.follow());
+  }
+
+  /** Show/hide the docked lyrics column (fullscreen only); remembered for next time. */
+  setFsShown(on: boolean, persist: boolean) {
+    this.fsShown = on;
+    if (persist) chrome.storage?.local.set({ [FS_KEY]: on }).catch(() => {});
+    this.applyFsDock();
+    if (on && this.timed) requestAnimationFrame(() => this.follow());
+  }
+
+  applyFsDock() {
+    const inFs = this.root.classList.contains('uw-fs');
+    const dock = inFs && this.fsShown;
+    this.root.classList.toggle('uw-fs-hidden', inFs && !this.fsShown);
+    const html = document.documentElement;
+    const was = html.classList.contains('uw-fs-dock');
+    html.style.setProperty('--uw-dock-w', `${DOCK_W}px`);
+    html.classList.toggle('uw-fs-dock', dock);
+    if (this.fsBtn) {
+      this.fsBtn.setAttribute('aria-pressed', String(dock));
+      this.fsBtn.setAttribute('aria-label', dock ? '가사 숨기기' : '가사 보기');
+      this.fsBtn.title = dock ? '가사 숨기기' : '가사 보기';
+    }
+    // YouTube sizes the video from the window size: nudge it to re-measure after the column changes
+    if (was !== dock) for (const ms of [30, 320]) setTimeout(() => window.dispatchEvent(new Event('resize')), ms);
+    if (inFs) {
+      setTimeout(() => {
+        const v = document.querySelector('video')?.getBoundingClientRect();
+        const fs = document.fullscreenElement;
+        html.dataset.uwFs = `${fs?.tagName}#${fs?.id}|flexyFs=${document.querySelector('ytd-watch-flexy')?.hasAttribute('fullscreen')}|video=${Math.round(v?.left ?? -1)},${Math.round(v?.width ?? -1)}|vw=${innerWidth}|dock=${dock}`;
+      }, 700);
+    }
+  }
+
+  /** A lyrics toggle in YouTube's fullscreen quick-action row (like / comment / share ...),
+   *  styled like its neighbours; falls back to the player's right-hand controls. */
+  ensureFsButton() {
+    if (this.fsBtn?.isConnected) return;
+    const row = document.querySelector('.ytp-fullscreen-quick-actions yt-player-quick-action-buttons');
+    const host = row ?? document.querySelector('.ytp-right-controls');
+    if (!host) return;
+    const b = this.fsBtn ?? document.createElement('button');
+    b.type = 'button';
+    const ref = row?.querySelector('button');
+    b.className = `${ref ? ref.className : 'ytp-button'} uw-fs-btn`;
+    b.replaceChildren(icon(ICON_LIST));
+    if (!this.fsBtn) {
+      b.addEventListener('click', (e) => { e.stopPropagation(); this.setFsShown(!this.fsShown, true); });
+      this.disposers.push(() => { b.remove(); document.documentElement.classList.remove('uw-fs-dock'); });
+    }
+    this.fsBtn = b;
+    if (row) row.insertBefore(b, row.lastElementChild);
+    else host.prepend(b);
+    this.applyFsDock();
   }
 
   mount(): boolean {
@@ -484,6 +557,9 @@ class Panel {
       this.refresh();
     }).catch(() => {});
     this.estTimer = window.setInterval(() => this.autoEstimate(), ESTIMATE_MS);
+    chrome.storage?.local.get(FS_KEY).then((r) => {
+      if (this.alive && r[FS_KEY] === false) this.setFsShown(false, false);
+    }).catch(() => {});
     chrome.storage?.local.get(SIZE_KEY).then((r) => {
       const v = r[SIZE_KEY];
       if (this.alive && v && typeof v.w === 'number' && typeof v.h === 'number') this.setSize(v, false);
@@ -627,6 +703,8 @@ class Panel {
   }
 
   tick() {
+    // YouTube re-renders its quick-action row now and then: keep our fullscreen toggle in it
+    if (this.fsBtn && !this.fsBtn.isConnected && this.root.classList.contains('uw-fs')) this.ensureFsButton();
     const v = this.video;
     if (!v || !this.ready) return;
     const t = v.currentTime;
@@ -1185,7 +1263,8 @@ class Panel {
     this.transcript = t.transcript;
     if (!this.chapters.length && t.songs.length >= 2) {
       const dur = this.currentDuration() ?? this.metaDuration;
-      this.chapters = songChapters(t, dur).map((c) => ({ start: c.start, end: c.end, title: c.artist ? `${c.artist} - ${c.title}` : c.title }));
+      // a 3-minute music video with several song cards is one song YouTube matched oddly, not a playlist
+      this.chapters = songListChapters(songChapters(t, dur).map((c) => ({ start: c.start, end: c.end, title: c.artist ? `${c.artist} - ${c.title}` : c.title })), dur);
       if (late && this.ready && this.chapters.length) { this.ctxKey = ''; this.resolveSong(); return; }
     }
     if (late && this.state.result && this.applyAsr()) this.render();
