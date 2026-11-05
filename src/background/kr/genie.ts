@@ -1,5 +1,5 @@
 import { getText } from '../http';
-import { plainLines, type KrLyrics, type KrSong } from './types';
+import { plainLines, type KrLyrics, type KrSong, delayLines, SOURCE_LEAD } from './types';
 
 /**
  * Genie (unofficial). Search: app.genie.co.kr/search/category/songs.json (JSON incl. plain lyrics and
@@ -33,7 +33,7 @@ export function parseGenieMsl(body: string): KrLyrics['lines'] {
 export async function genieLyrics(song: KrSong): Promise<KrLyrics | null> {
   const base = { artist: song.artist, title: song.title, duration: song.duration, source: 'genie' as const };
   const synced = parseGenieMsl(await getText(`https://dn.genie.co.kr/app/purchase/get_msl.asp?path=a&songid=${encodeURIComponent(song.id)}`, 'Genie').catch(() => ''));
-  if (synced.length >= 3) return { ...base, kind: 'synced', lines: synced };
+  if (synced.length >= 3) return { ...base, kind: 'synced', lines: delayLines(synced, SOURCE_LEAD.genie) };
   const plain = plainLines(song.plain ?? '');
   return plain.length ? { ...base, kind: 'plain', lines: plain } : null;
 }
