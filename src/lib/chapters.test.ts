@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseChapters, chapterAt, songListChapters } from './chapters';
+import { parseChapters, chapterAt, songListChapters, capLastChapter } from './chapters';
 
 describe('parseChapters', () => {
   it('parses variants', () => {
@@ -37,5 +37,18 @@ describe('songListChapters', () => {
   it('keeps a real playlist', () => {
     const songs = [{ start: 0, title: 'A - a' }, { start: 200, title: 'B - b' }, { start: 430, title: 'C - c' }];
     expect(songListChapters(songs, 3600)).toEqual(songs);
+  });
+});
+
+describe('loop videos', () => {
+  it('drops a repeated timestamp from the title', () => {
+    expect(parseChapters('00:00 00:00  Messy Heart\n03:41 03:41  Overflow Heart Mode')).toEqual([
+      { start: 0, title: 'Messy Heart' }, { start: 221, title: 'Overflow Heart Mode' },
+    ]);
+  });
+  it('ends the last song of a short list in a much longer video', () => {
+    const c = [{ start: 0, title: 'a' }, { start: 200, title: 'b' }, { start: 400, title: 'c' }];
+    expect(capLastChapter(c, 39447)[2]).toEqual({ start: 400, title: 'c', end: 720 });
+    expect(capLastChapter(c, 600)).toBe(c);
   });
 });

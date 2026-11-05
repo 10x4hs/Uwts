@@ -1,4 +1,5 @@
 import type { Chapter } from '../shared/types';
+import { cleanTitle } from './chapters';
 
 type Obj = Record<string, any>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null;
@@ -59,7 +60,6 @@ const TIME = '((?:\\d{1,2}:)?\\d{1,2}:\\d{2})';
 const LEAD = new RegExp(`^\\s*(?:\\d+[.)]\\s*)?\\[?\\(?${TIME}\\)?\\]?\\s*[-–—|:.~]?\\s*(.+?)\\s*$`);
 const TRAIL = new RegExp(`^\\s*(?:\\d+[.)]\\s*)?(.+?)\\s*[-–—|:~]?\\s*\\[?\\(?${TIME}\\)?\\]?\\s*$`);
 const toSec = (s: string) => s.split(':').map(Number).reduce((a, n) => a * 60 + n, 0);
-const cleanTitle = (s: string) => s.replace(/^[\s\-–—|:.]+|[\s\-–—|:]+$/g, '').trim();
 const TIME_ONLY = /\d{1,2}:\d{2}/;
 
 /** Longest run of entries whose times keep going forward (drops "total 1:08:00"-style lines). */

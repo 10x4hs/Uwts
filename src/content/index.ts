@@ -2,7 +2,7 @@ import { send, ContextInvalidated } from '../shared/messages';
 import type { Chapter, LyricLine, LyricsResult, Palette, ResolveContext, SongQuery } from '../shared/types';
 import { overrideKey } from '../lib/keys';
 import { buildQueries } from '../lib/queries';
-import { parseChapters, chapterAt, songListChapters } from '../lib/chapters';
+import { parseChapters, chapterAt, songListChapters, capLastChapter } from '../lib/chapters';
 import { lineIndexAt } from '../lib/lrc';
 import { shiftHue } from '../lib/color';
 import { blurLevel, staggerDelay, scrollOffset, fillTiming, singingPace, sungSeconds, wordChar, isSeek, titlesMatch, shouldAutoRetry, NavToken } from './motion';
@@ -11,7 +11,7 @@ import { VocalTracker } from './audio';
 import { addAnchor, timedLines, parseAnchors, groupByMatch, type Anchor } from './anchors';
 import { timelineParams, parseTimeline, songChapters, type Timeline } from '../lib/timeline';
 import { commentsToken, parseComments, pickTracklist } from '../lib/comments';
-import { alignToTranscript, type TranscriptSeg } from './asr';
+import { alignToTranscript, captionWordCount, captionLyrics, type TranscriptSeg } from './asr';
 import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, displayTitle, displayArtist, type Action, type PanelState } from './state';
 
 const PARTICLES = 14;
@@ -225,6 +225,9 @@ class Panel {
   channel = '';
   videoTitle = '';
   chapters: Chapter[] = [];
+  /** the shown lyrics are the user's own pick for this song, or YouTube's captions standing in */
+  picked = false;
+  fromCaptions = false;
   /** interlude waveform, moved under the line whose pause it fills */
   breakEl = el('div', 'uw-break');
   waveBars: HTMLElement[] = [];
@@ -1245,7 +1248,7 @@ class Panel {
     }
     this.videoTitle = title;
     this.channel = channel;
-    this.chapters = description ? songListChapters(parseChapters(description), this.metaDuration) : [];
+    this.chapters = description ? capLastChapter(songListChapters(parseChapters(description), this.metaDuration), this.metaDuration) : [];
     this.commentChapters = false;
     const tl = timelineInPage(this.videoId);
     const long = !this.chapters.length && (this.metaDuration ?? 0) > LONG_VIDEO_SEC;
@@ -1268,7 +1271,7 @@ class Panel {
   useCommentTracklist(list: Chapter[], late: boolean) {
     if (this.commentChapters) return;
     this.commentChapters = true;
-    this.chapters = list;
+    this.chapters = capLastChapter(list, this.metaDuration);
     if (late && this.ready) { this.ctxKey = ''; this.resolveSong(); }
   }
 
@@ -1283,6 +1286,7 @@ class Panel {
       this.chapters = songListChapters(songChapters(t, dur).map((c) => ({ start: c.start, end: c.end, title: c.artist ? `${c.artist} - ${c.title}` : c.title })), dur);
       if (late && this.ready && this.chapters.length) { this.ctxKey = ''; this.resolveSong(); return; }
     }
+    if (late && this.state.status !== 'loading' && this.captionFallback()) return;
     if (late && this.state.result && this.applyAsr()) this.render();
   }
 
@@ -1314,6 +1318,38 @@ class Panel {
   }
 
   /** Place the lyrics on YouTube's auto-captions. Manual sync always wins. Returns true when it changed the timing. */
+  /**
+   * Playlist songs known only by title (no artist anywhere) are often songs no lyrics site has; a
+   * same-titled hit is then another song. When YouTube's auto-captions for this song clearly sing
+   * something else (or nothing was found), show the captions themselves as timed lyrics.
+   */
+  captionFallback(): boolean {
+    const res = this.state.result;
+    if (this.fromCaptions || this.picked || this.state.overridden || this.manualSync || this.anchors.length) return false;
+    if (this.chapterIndex < 0 || !this.transcript.length) return false;
+    const chap = this.chapters[this.chapterIndex];
+    const hit = chapterAt(this.chapters, this.chapterStart);
+    if (!chap || !hit) return false;
+    const end = hit.end ?? this.currentDuration() ?? this.metaDuration ?? this.chapterStart + 360;
+    const window = { start: this.chapterStart, end };
+    if (captionWordCount(this.transcript, window) < 40) return false;
+    const { title, artist } = splitChapter(chap.title);
+    if (res) {
+      if (artist || res.lines.length < 8) return false;
+      const a = alignToTranscript(res.lines, this.transcript, this.asrWindow());
+      // a handful of shared filler words ("yeah", "right") is no support for a whole song's lyrics
+      if (a?.confident || (a?.matches ?? 0) > Math.max(3, Math.round(res.lines.length * 0.06))) return false;
+    }
+    const lines = captionLyrics(this.transcript, { start: Math.max(0, window.start - 2), end: window.end }, this.chapterStart);
+    if (lines.length < 4) return false;
+    this.fromCaptions = true;
+    this.syncOffset = 0;
+    this.titleEl.textContent = title;
+    this.subEl.textContent = `YouTube 자동 자막 · ${this.chapterIndex + 1} / ${this.chapters.length}곡`;
+    this.dispatch({ type: 'loaded', result: { kind: 'synced', artist: 'YouTube 자동 자막', title, lines } });
+    return true;
+  }
+
   applyAsr(result: LyricsResult | null = this.state.result): boolean {
     const had = this.asrSynced;
     this.autoAnchors = [];
@@ -1386,7 +1422,7 @@ class Panel {
    * synced by hand (their anchors point at line indices of the current lyrics).
    */
   async upgradeWords(result: LyricsResult | null, seq: number) {
-    if (!result || result.kind !== 'synced' || result.lines.some((l) => l.singer)) return;
+    if (!result || result.kind !== 'synced' || this.fromCaptions || result.lines.some((l) => l.singer)) return;
     // already word-timed (NetEase): still look, but only take LyricsPlus for its duet singer marks
     const hasWords = result.lines.some((l) => l.words?.length);
     const d = (result as Cand).duration;
@@ -1404,6 +1440,8 @@ class Panel {
     const seq = ++this.reqSeq;
     clearTimeout(this.retryTimer);
     this.lastCtx = ctx;
+    this.picked = false;
+    this.fromCaptions = false;
     this.candidates = [];
     this.bestQuery = guess;
     this.dispatch({ type: 'load', query: guess });
@@ -1416,12 +1454,15 @@ class Panel {
         this.candidates = res.candidates as Cand[];
         this.bestQuery = res.query;
         this.autoConfident = false;
+        this.picked = !!res.picked;
+        this.fromCaptions = false;
         this.applyPrior(res.result);
         if (res.result) {
           this.titleEl.textContent = displayTitle(res.result.title);
           this.subEl.textContent = this.subtitleFor(res.result.artist);
         }
         this.dispatch({ type: 'loaded', result: res.result });
+        if (this.captionFallback()) return;
         if (this.applyAsr()) this.render();
         if (!this.searchEl.hidden) this.showCandidates();
         void this.upgradeWords(res.result, seq);
@@ -1622,6 +1663,7 @@ class Panel {
     clearTimeout(this.retryTimer);
     this.closeSearch();
     this.autoConfident = false;
+    this.fromCaptions = false;
     this.applyPrior(r);
     this.titleEl.textContent = displayTitle(r.title);
     this.subEl.textContent = this.subtitleFor(r.artist);

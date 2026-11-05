@@ -196,3 +196,37 @@ function alignPlain(lines: LyricLine[], segs: TranscriptSeg[], win: { start: num
 }
 
 const round = (x: number) => Math.round(x * 1000) / 1000;
+
+/** Non-lyric caption tags ("[music]", "[음악]", "[singing]", "♪"). */
+const CAPTION_TAG = /\[[^\]]*\]|♪+/g;
+const WORD = /[\p{L}\p{N}']+/gu;
+
+/** Sung words YouTube's captions hold inside a window. */
+export function captionWordCount(segs: TranscriptSeg[], window: { start: number; end: number }): number {
+  let n = 0;
+  for (const s of segs) if (s.time >= window.start && s.time < window.end) n += (s.text.replace(CAPTION_TAG, ' ').match(WORD) ?? []).length;
+  return n;
+}
+
+/**
+ * Auto-captions as lyric lines for songs no lyrics site knows: each caption segment is split into
+ * sentences, timed by their share of the segment's characters, relative to `start`.
+ */
+export function captionLyrics(segs: TranscriptSeg[], window: { start: number; end: number }, start: number): LyricLine[] {
+  const inside = segs.filter((s) => s.time >= window.start && s.time < window.end).sort((a, b) => a.time - b.time);
+  const out: LyricLine[] = [];
+  inside.forEach((s, k) => {
+    const text = s.text.replace(CAPTION_TAG, ' ').replace(/\s+/g, ' ').trim();
+    if (!(text.match(WORD) ?? []).length) return;
+    const next = inside[k + 1]?.time ?? s.time + 6;
+    const span = Math.max(0.5, Math.min(12, next - s.time));
+    const parts = text.split(/(?<=[.!?])\s+/).filter((p) => (p.match(WORD) ?? []).length);
+    const total = parts.reduce((a, p) => a + p.length, 0) || 1;
+    let used = 0;
+    for (const p of parts) {
+      out.push({ time: Math.round((s.time - start + span * (used / total)) * 100) / 100, text: p.replace(/[.,]+$/, '') });
+      used += p.length;
+    }
+  });
+  return out;
+}
