@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildQueries, bareTitle, artistVariants, cleanChannel, scriptOnly } from './queries';
+import { buildQueries, bareTitle, artistVariants, cleanChannel, scriptOnly, videoArtist } from './queries';
 
 const ctx = (videoTitle: string, channel = '', extra = {}) => ({ videoId: 'abc123xyz', videoTitle, channel, ...extra });
 
@@ -62,5 +62,18 @@ describe('chapter titles without artist', () => {
   it('searches the bare song title first (uploader is not the artist)', () => {
     const plan = buildQueries({ videoId: 'x', videoTitle: 'Playlist 리센느 신곡 PULSE 앨범 전곡 듣기 with', channel: '김지투', chapterTitle: '백화요란 (Inside Out)' });
     expect(plan.queries[0]).toBe('백화요란');
+  });
+});
+
+describe('artist from the video title for title-only chapters', () => {
+  it('reads "X의 …" and "X - …"', () => {
+    expect(videoArtist('산이 (San E)의 킬링벌스를 라이브로! / 맛좋은산, 랩 서커스')).toBe('산이 (San E)');
+    expect(videoArtist('IU - 2024 Playlist')).toBe('IU');
+    expect(videoArtist('[ᴘʟᴀʏʟɪꜱᴛ] 위켄드는 전설이다..🌴 The Weeknd Playlist')).toBe('');
+  });
+  it('searches the chapter song with that artist', () => {
+    const plan = buildQueries({ videoId: 'x', videoTitle: '산이 (San E)의 킬링벌스를 라이브로! / 맛좋은산, 랩 서커스', channel: 'df 디에프', chapterTitle: 'Rap Circus' });
+    expect(plan.artist).toBe('산이');
+    expect(plan.queries.slice(0, 3)).toEqual(expect.arrayContaining(['산이 Rap Circus']));
   });
 });

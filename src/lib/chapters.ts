@@ -42,17 +42,25 @@ export function chapterAt(chapters: Chapter[], t: number): { chapter: Chapter; i
   return { chapter: c, index: idx, end: c.end ?? (idx + 1 < chapters.length ? chapters[idx + 1].start : null) };
 }
 
-/** Songs are rarely under this long; chapters shorter than it are parts of one song (verses, rappers). */
-const SONG_MIN_SEC = 90;
+/** Chapters this short are parts of one song (rapper turns), not songs. Medleys such as
+ *  "Killing Verse" sing one verse per song, so whole songs can be only 60-90 s here. */
+const PART_MAX_SEC = 45;
 const SHORT_VIDEO_SEC = 8 * 60;
+const SECTION_RE = /^(?:intro|outro|verse|hook|chorus|pre-?chorus|bridge|drop|break|interlude|part\s*\d|\d+\s*절|후렴|벌스|훅|인트로|아웃트로|브릿지)\b/i;
+const normTitle = (t: string) => t.toLowerCase().replace(/^[^:：]*[:：]\s*/, '').replace(/[\s()\[\]._-]+/g, '');
 
 /** Chapters that split a playlist into songs, or [] when they split one song into parts. */
 export function songListChapters(chapters: Chapter[], duration?: number): Chapter[] {
   if (chapters.length < 2) return chapters;
   if (duration && duration < SHORT_VIDEO_SEC) return [];
+  // the same name coming back (rapper A, B, A, C, A) marks turns within one song
+  const names = chapters.map((c) => normTitle(c.title)).filter(Boolean);
+  if (new Set(names).size < names.length) return [];
+  // mostly "Verse 1 / Hook / Bridge" style labels
+  if (chapters.filter((c) => SECTION_RE.test(c.title.trim())).length * 2 > chapters.length) return [];
   const lens = chapters.slice(0, -1).map((c, i) => (c.end ?? chapters[i + 1].start) - c.start).sort((a, b) => a - b);
   const median = lens[Math.floor(lens.length / 2)];
-  return median < SONG_MIN_SEC ? [] : chapters;
+  return median < PART_MAX_SEC ? [] : chapters;
 }
 
 /**
