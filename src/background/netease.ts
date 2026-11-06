@@ -42,12 +42,20 @@ export function pickNetease(songs: NeteaseSong[], q: SongQuery): NeteaseSong | n
 
 const META_RE = /^\s*(作词|作曲|编曲|制作人|混音|母带|和声|吉他|贝斯|鼓|录音|监制|出品|词|曲|op|sp|lyricist|composer|arranger|producer)\s*[:：]/i;
 
+/** Credits and metadata, not lyrics: "作词: x", JSON credit lines ({"t":0,"c":[{"tx":"作词: "}…]}), [by:x]. */
+export function isMetaLine(t: string): boolean {
+  const s = t.trim();
+  return META_RE.test(s) || /^\{.*\}$/.test(s) || /^\[[a-z]+:[^\]]*\]$/i.test(s);
+}
+
+const INSTRUMENTAL_RE = /纯音乐|純音樂|没有填词|請欣賞|请欣赏/;
+
 export function parseNeteaseLrc(lrc: string): LyricsResult['lines'] {
-  return parseLrc(lrc).filter((l) => !META_RE.test(l.text));
+  return parseLrc(lrc).filter((l) => !isMetaLine(l.text));
 }
 
 export function parseNeteaseYrc(yrc: string): LyricsResult['lines'] {
-  return parseYrc(yrc, (t) => META_RE.test(t));
+  return parseYrc(yrc, isMetaLine);
 }
 
 export async function searchSongs(s: string): Promise<NeteaseSong[]> {
@@ -66,8 +74,12 @@ export async function lyricFor(song: NeteaseSong): Promise<LyricsResult | null> 
   const words = parseNeteaseYrc(r.body?.yrc?.lyric ?? '');
   // only trust yrc when it covers the same lyrics (not a short excerpt)
   if (words.length && words.length >= lines.length * 0.8) return { kind: 'synced', artist, title: song.name, lines: words };
+  if (lines.length <= 2 && lines.some((l) => INSTRUMENTAL_RE.test(l.text))) return null;
   if (lines.length) return { kind: 'synced', artist, title: song.name, lines };
-  const plain = text.split(/\r?\n/).filter((t) => t.trim() && !META_RE.test(t)).map((t) => ({ time: -1, text: t }));
+  // (instrumentals often carry nothing but credit lines: then there are no lyrics)
+  const plain = text.split(/\r?\n/).filter((t) => t.trim() && !isMetaLine(t)).map((t) => ({ time: -1, text: t.trim() }));
+  // "纯音乐, 请欣赏" = an instrumental: no lyrics to show
+  if (plain.length <= 2 && plain.some((l) => INSTRUMENTAL_RE.test(l.text))) return null;
   return plain.length ? { kind: 'plain', artist, title: song.name, lines: plain } : null;
 }
 
