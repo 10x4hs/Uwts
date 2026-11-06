@@ -1332,8 +1332,16 @@ class Panel {
     if (!chap || !hit) return false;
     const end = hit.end ?? this.currentDuration() ?? this.metaDuration ?? this.chapterStart + 360;
     const window = { start: this.chapterStart, end };
-    if (captionWordCount(this.transcript, window) < 40) return false;
     const { title, artist } = splitChapter(chap.title);
+    const words = captionWordCount(this.transcript, window);
+    // captions there but only "[music]": an instrumental, so a same-titled hit can't be it
+    const segs = this.transcript.filter((x) => x.time >= window.start && x.time < window.end).length;
+    if (res && !artist && segs >= 3 && words < 8) {
+      this.fromCaptions = true;
+      this.dispatch({ type: 'loaded', result: null });
+      return true;
+    }
+    if (words < 40) return false;
     if (res) {
       if (artist || res.lines.length < 8) return false;
       const a = alignToTranscript(res.lines, this.transcript, this.asrWindow());

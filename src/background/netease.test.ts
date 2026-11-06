@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { artistMatches, parseNeteaseLrc, pickNetease, titleMatches, type NeteaseSong } from './netease';
+import { isMetaLine, artistMatches, parseNeteaseLrc, pickNetease, titleMatches, type NeteaseSong } from './netease';
 
 const s = (id: number, name: string, artist: string, duration?: number): NeteaseSong =>
   ({ id, name, artists: [{ name: artist }], duration });
@@ -31,5 +31,15 @@ describe('netease matcher', () => {
   it('drops metadata lines', () => {
     const lines = parseNeteaseLrc('[00:00.00] 作词 : A\n[00:01.00] 作曲 : B\n[00:02.00] 编曲 : C\n[00:10.00]hello');
     expect(lines.map((l) => l.text)).toEqual(['hello']);
+  });
+});
+
+describe('netease credit lines', () => {
+  it('treats JSON credits and tags as metadata', () => {
+    expect(isMetaLine('{"t":0,"c":[{"tx":"作词: "},{"tx":"Yaokai","li":"http://p1.music.126.net/x.jpg"}]}')).toBe(true);
+    expect(isMetaLine('{"c":[{"tx":"作曲: "},{"tx":"Yaokai"}]}')).toBe(true);
+    expect(isMetaLine('[by:someone]')).toBe(true);
+    expect(isMetaLine('作词：Yaokai')).toBe(true);
+    expect(isMetaLine('I love you {baby}')).toBe(false);
   });
 });
