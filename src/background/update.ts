@@ -4,6 +4,8 @@
  *   (a private repo is only visible to invited collaborators who are signed in).
  * - reloadIfFilesChanged: after a friend unzips a new version over the folder, the files on disk
  *   are newer than the running code; reload so the new version runs without pressing ↻.
+ *   The same check catches every local `npm run build` (dist/build.txt), so a dev copy loaded
+ *   from dist/ follows the code without touching chrome://extensions.
  */
 export const REPO = '10x4hs/Uwts';
 const KEY = 'uw:update';
@@ -44,9 +46,27 @@ export async function checkUpdate(): Promise<UpdateInfo> {
   return { current, latest, url: `https://github.com/${REPO}/releases/download/v${latest}/uwts-lyrics-${latest}.zip` };
 }
 
+/** Id of the running build ('' under tests). */
+export const BUILD = typeof __UW_BUILD__ === 'string' ? __UW_BUILD__ : '';
+
+/** Files on disk differ from the running code: a new build (dist/build.txt) or a new version. */
+export function filesChanged(diskBuild: string | null, diskVersion: string | undefined, build: string, version: string): boolean {
+  if (diskBuild && build) return diskBuild !== build;
+  return !!diskVersion && diskVersion !== version;
+}
+
+async function readText(path: string): Promise<string | null> {
+  try {
+    const res = await fetch(chrome.runtime.getURL(path), { cache: 'no-store' });
+    return res.ok ? (await res.text()).trim() : null;
+  } catch { return null; }
+}
+
 export async function reloadIfFilesChanged(): Promise<void> {
   try {
-    const disk = await (await fetch(chrome.runtime.getURL('manifest.json'), { cache: 'no-store' })).json() as { version?: string };
-    if (disk.version && disk.version !== chrome.runtime.getManifest().version) chrome.runtime.reload();
+    const diskBuild = await readText('build.txt');
+    let diskVersion: string | undefined;
+    if (!diskBuild || !BUILD) diskVersion = (JSON.parse((await readText('manifest.json')) ?? '{}') as { version?: string }).version;
+    if (filesChanged(diskBuild, diskVersion, BUILD, chrome.runtime.getManifest().version)) chrome.runtime.reload();
   } catch { /* packed install or unreadable: nothing to do */ }
 }

@@ -14,4 +14,6 @@ writeFileSync(p, JSON.stringify(m, null, 2) + '\n');
 run('commit', '-am', `chore: release v${m.version}`);
 run('tag', `v${m.version}`);
 run('push', 'origin', 'HEAD', `v${m.version}`);
+// rebuild dist/ too: a copy loaded unpacked from it (the dev's own) picks the new version up by itself
+execFileSync('npm', ['run', 'build'], { stdio: 'inherit' });
 console.log(`v${m.version} pushed; the release appears at https://github.com/10x4hs/Uwts/releases in about a minute`);
