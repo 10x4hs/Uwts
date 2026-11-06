@@ -4,7 +4,9 @@
   "version": "0.1.10",
   "description": "Synced lyrics side panel for YouTube music videos.",
   "permissions": [
+    "alarms",
     "declarativeNetRequestWithHostAccess",
+    "scripting",
     "storage"
   ],
   "host_permissions": [

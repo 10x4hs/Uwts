@@ -292,6 +292,7 @@ class Panel {
     this.videoId = videoId;
     this.token = token;
     this.root.setAttribute('aria-label', '가사');
+    this.root.dataset.uwBuild = BUILD;
     const thumbUrl = `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
     // animated blurred thumbnail mesh
     for (let i = 1; i <= 3; i++) {
@@ -527,6 +528,7 @@ class Panel {
     b.type = 'button';
     const ref = row?.querySelector('button');
     b.className = `${ref ? ref.className : 'ytp-button'} uw-fs-btn`;
+    b.dataset.uwBuild = BUILD;
     b.replaceChildren(icon(ICON_LIST));
     if (!this.fsBtn) {
       b.addEventListener('click', (e) => { e.stopPropagation(); this.setFsShown(!this.fsShown, true); });
@@ -1778,7 +1780,28 @@ class Panel {
 // ---------- SPA lifecycle ----------
 let panel: Panel | null = null;
 
+// A newer copy of this script can be injected into the same tab after the extension reloads
+// (background onInstalled). The newest copy wins: older ones retire on 'uw:retire', and the
+// panels of copies too old to listen (≤ 0.1.10) are hidden by build id.
+const BUILD = typeof __UW_BUILD__ === 'string' ? __UW_BUILD__ : 'dev';
+let retired = false;
+document.dispatchEvent(new CustomEvent('uw:retire'));
+document.addEventListener('uw:retire', () => {
+  retired = true;
+  nav.next();
+  panel?.destroy();
+  panel = null;
+});
+document.querySelectorAll('.uw-panel, .uw-fs-btn').forEach((n) => n.remove());
+document.documentElement.classList.remove('uw-fs-dock');
+document.getElementById('uw-retire')?.remove();
+const retireStyle = document.createElement('style');
+retireStyle.id = 'uw-retire';
+retireStyle.textContent = `.uw-panel:not([data-uw-build="${BUILD}"]),.uw-fs-btn:not([data-uw-build="${BUILD}"]){display:none!important}`;
+document.head.append(retireStyle);
+
 function sync() {
+  if (retired) return;
   const id = videoIdFromUrl();
   if (panel && panel.videoId === id) { panel.rehost(); return; }
   // new navigation: invalidate every in-flight result and reset immediately
@@ -1806,10 +1829,10 @@ chrome.storage?.onChanged.addListener((changes, area) => {
     panel?.setCollapsed(collapsedPref, false);
   }
 });
-document.addEventListener('yt-navigate-start', () => { nav.next(); panel?.destroy(); panel = null; });
+document.addEventListener('yt-navigate-start', () => { if (retired) return; nav.next(); panel?.destroy(); panel = null; });
 document.addEventListener('yt-navigate-finish', sync);
 // re-attach after YouTube re-renders the side column (theater mode, window resizes)
 setInterval(() => {
-  if (panel && !panel.root.isConnected && panel.videoId === videoIdFromUrl()) panel.rehost();
+  if (!retired && panel && !panel.root.isConnected && panel.videoId === videoIdFromUrl()) panel.rehost();
 }, 1000);
 sync();

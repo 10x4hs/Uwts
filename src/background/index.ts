@@ -179,5 +179,26 @@ chrome.runtime.onMessage.addListener((req: Request, _sender, sendResponse) => {
   return true;
 });
 
-// a friend unzipped a new version over the folder: run it
+// a friend unzipped a new version over the folder, or a dev build landed in dist/: run it
 void reloadIfFilesChanged();
+
+// Unpacked copies (dev and friends alike) check their files every 30 s; a packed install never changes.
+const FILES_ALARM = 'uw:files';
+chrome.management?.getSelf?.().then((self) => {
+  if (self.installType === 'development') void chrome.alarms?.create(FILES_ALARM, { periodInMinutes: 0.5 });
+}).catch(() => {});
+chrome.alarms?.onAlarm.addListener((a) => { if (a.name === FILES_ALARM) void reloadIfFilesChanged(); });
+
+// After an install/update the YouTube tabs already open still run the old (now dead) script:
+// give them the new one. It retires the old panel itself, and the video keeps playing.
+chrome.runtime.onInstalled.addListener(async (d) => {
+  if (d.reason !== 'install' && d.reason !== 'update') return;
+  try {
+    for (const tab of await chrome.tabs.query({ url: 'https://www.youtube.com/*' })) {
+      if (tab.id == null || tab.discarded) continue;
+      const target = { tabId: tab.id };
+      await chrome.scripting.insertCSS({ target, files: ['content.css'] }).catch(() => {});
+      await chrome.scripting.executeScript({ target, files: ['content.js'] }).catch(() => {});
+    }
+  } catch { /* no scripting permission (old manifest): the user reloads the tab */ }
+});
