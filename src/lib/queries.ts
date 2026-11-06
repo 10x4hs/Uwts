@@ -56,6 +56,15 @@ function rawArtistPart(videoTitle: string): string {
   return q ? q[1] : '';
 }
 
+/** Who the whole video is by, for chapters that list only song titles:
+ *  "산이 (San E)의 킬링벌스를 라이브로!" -> "산이 (San E)", "IU - Playlist" -> "IU". */
+export function videoArtist(videoTitle: string): string {
+  const t = videoTitle.normalize('NFKC').replace(/^\s*(?:\[[^\]]*\]|【[^】]*】)\s*/, '');
+  const own = t.match(/^(.{1,30}?(?:\([^)]{1,20}\))?)의\s/);
+  if (own && !/[!?]/.test(own[1])) return squash(own[1]);
+  return rawArtistPart(t);
+}
+
 const firstArtist = (s: string) => squash(s.split(/\s*(?:&|,|×|\bx\b|\bfeat\.?|\bft\.?|\bwith\b)\s*/i)[0]);
 
 export interface QueryPlan { queries: string[]; artist: string; title: string }
@@ -68,6 +77,9 @@ export function buildQueries(ctx: ResolveContext, max = 6): QueryPlan {
   const hasArtistInTitle = !!rawArtistPart(base);
   const artists: string[] = [];
   const addA = (a: string) => { const v = squash(a); if (v && !artists.some((x) => x.toLowerCase() === v.toLowerCase())) artists.push(v); };
+  // song-title-only chapters: the video title names the artist better than the uploader does
+  const vtA = ctx.chapterTitle && !hasArtistInTitle ? videoArtist(ctx.videoTitle) : '';
+  if (vtA) for (const v of artistVariants(firstArtist(vtA) || vtA)) addA(v);
   addA(parsed.artist);
   const rawA = rawArtistPart(base);
   if (rawA) for (const part of [rawA, firstArtist(rawA.replace(/\([^)]*\)/g, ' '))]) for (const v of artistVariants(firstArtist(part) || part)) addA(v);
@@ -104,5 +116,5 @@ export function buildQueries(ctx: ResolveContext, max = 6): QueryPlan {
   for (const a of aRest.slice(2)) add(`${a} ${bare}`);
   for (const t of titles.slice(1)) for (const a of aRest) add(`${a} ${t}`);
   add(bare);
-  return { queries: out.slice(0, max), artist: parsed.artist, title: bare };
+  return { queries: out.slice(0, max), artist: vtA ? artists[0] : parsed.artist, title: bare };
 }

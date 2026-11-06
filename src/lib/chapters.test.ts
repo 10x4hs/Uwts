@@ -38,6 +38,17 @@ describe('songListChapters', () => {
     const songs = [{ start: 0, title: 'A - a' }, { start: 200, title: 'B - b' }, { start: 430, title: 'C - c' }];
     expect(songListChapters(songs, 3600)).toEqual(songs);
   });
+  it('keeps a medley that sings one verse per song (Killing Verse)', () => {
+    const kv = [[0, '맛좋은산'], [92, 'Rap Circus'], [153, 'Rap Genius'], [220, 'Do It For Fun'], [290, '아는사람 얘기'], [373, '한여름밤의 꿀'], [485, '발라드랩'], [633, '우리다시잘할수있을까']]
+      .map(([start, title]) => ({ start: start as number, title: title as string }));
+    expect(songListChapters(kv, 835)).toEqual(kv);
+  });
+  it('drops repeated names and verse/hook labels in a long video', () => {
+    const turns = [{ start: 0, title: 'A' }, { start: 100, title: 'B' }, { start: 200, title: 'A' }, { start: 300, title: 'C' }];
+    expect(songListChapters(turns, 900)).toEqual([]);
+    const sections = [{ start: 0, title: 'Intro' }, { start: 100, title: 'Verse 1' }, { start: 200, title: 'Hook' }, { start: 300, title: 'Verse 2' }];
+    expect(songListChapters(sections, 900)).toEqual([]);
+  });
 });
 
 describe('loop videos', () => {
