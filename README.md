@@ -11,21 +11,36 @@ YouTube 노래 영상 옆에, 노래를 따라 차오르는 싱크 가사를 띄
 
 가사는 그때그때 각 서비스에서 불러와 보여 줄 뿐, 이 저장소나 확장 프로그램에 들어 있지 않아요.
 
-<img width="1666" height="995" alt="Uwts Lyrics 패널" src="https://github.com/user-attachments/assets/4b1df667-d6b6-4dbf-a662-3583ca91e71c" />
+<p align="center">
+  <img src="docs/media/demo.gif" width="720" alt="Uwts Lyrics 소개 영상 미리보기: 노래를 따라 가사가 차오르는 패널">
+  <br>
+  <a href="https://github.com/10x4hs/Uwts/releases/download/v0.1.12/uwts-intro.mp4"><b>▶ 1분 소개 영상 보기 (mp4)</b></a>
+</p>
 
 ## 설치
 
-### **[⬇️ uwts-lyrics.zip 받기 (최신 버전)](https://github.com/10x4hs/Uwts/releases/latest/download/uwts-lyrics.zip)**
+5분이면 끝나요. Chrome, Edge, 웨일 모두 같은 방법이에요.
 
-```text
-1. 위 링크로 zip을 받아 압축을 풀어요
-2. uwts-lyrics 폴더를 지우지 않을 곳(예: 문서 폴더)에 옮겨 둬요
-3. 주소창에 chrome://extensions        # Edge는 edge://, 웨일은 whale://
-4. 오른쪽 위 '개발자 모드'를 켜요
-5. '압축해제된 확장 프로그램을 로드합니다' → uwts-lyrics 폴더 선택
-```
+**① 받기** · **[⬇️ uwts-lyrics.zip 받기 (최신 버전)](https://github.com/10x4hs/Uwts/releases/latest/download/uwts-lyrics.zip)**
 
-YouTube에서 노래 영상을 열면 오른쪽에 가사가 나와요. **가사 소스 권한 허용** 버튼이 보이면 한 번 눌러 주세요.
+압축을 풀면 나오는 `uwts-lyrics` 폴더를 지우지 않을 곳(예: 문서 폴더)에 옮겨 둬요. 이 폴더를 지우면 확장 프로그램도 사라져요.
+
+**② 개발자 모드 켜기** · 주소창에 `chrome://extensions`를 입력하고, 오른쪽 위 **개발자 모드**를 켜요.
+<sub>Edge는 `edge://extensions`, 웨일은 `whale://extensions`</sub>
+
+<img src="docs/media/install-1-devmode.png" width="800" alt="확장 프로그램 페이지 오른쪽 위의 개발자 모드 스위치">
+
+**③ 폴더 불러오기** · 왼쪽 위에 생긴 **압축해제된 확장 프로그램 로드**를 누르고, ①의 `uwts-lyrics` 폴더를 골라요.
+
+<img src="docs/media/install-2-load.png" width="800" alt="압축해제된 확장 프로그램 로드 버튼">
+
+**④ 확인** · 목록에 **Uwts Lyrics**가 보이고 스위치가 켜져 있으면 설치 끝이에요.
+
+<img src="docs/media/install-3-loaded.png" width="800" alt="확장 프로그램 목록에 나타난 Uwts Lyrics">
+
+**⑤ YouTube에서 노래 틀기** · 노래 영상을 열면 오른쪽에 가사가 나와요. 패널 위에 **가사 소스 권한 허용** 버튼이 보이면 한 번 눌러 주세요. 더 많은 곡을 찾을 수 있어요.
+
+<img src="docs/media/install-4-youtube.png" width="800" alt="YouTube 영상 오른쪽에 뜬 가사 패널">
 
 ## 업데이트
 
@@ -37,6 +52,8 @@ YouTube에서 노래 영상을 열면 오른쪽에 가사가 나와요. **가사
 바뀐 점은 [Releases](https://github.com/10x4hs/Uwts/releases)에 있어요.
 
 ## 할 수 있는 것
+
+<img width="1666" height="995" alt="Uwts Lyrics 패널" src="https://github.com/user-attachments/assets/4b1df667-d6b6-4dbf-a662-3583ca91e71c" />
 
 | 기능 | 설명 |
 |---|---|
