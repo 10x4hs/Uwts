@@ -208,3 +208,19 @@ describe('alignToTranscript: per-part offsets', () => {
     }
   });
 });
+
+describe('alignToTranscript: hook-heavy songs', () => {
+  test('a hook sung over and over still counts as a confident match, and a replayed bridge splits', () => {
+    // verses with unique words, a hook line between every verse line
+    const lines: LyricLine[] = [];
+    for (let k = 0; k < 40; k++) {
+      lines.push({ time: k * 5, text: k % 2 ? 'thank you next thank you next' : `verse line ${k} words${k} more${k} unique${k} lyric${k}` });
+    }
+    const cut = 120; // after this lyric time the video replays a part: everything is 20 s later
+    const segs: TranscriptSeg[] = lines.map((l) => ({ time: l.time + (l.time < cut ? 10 : 30), text: l.text }));
+    const r = alignToTranscript(lines, segs, { start: 0, end: 60 })!;
+    expect(r.confident).toBe(true);
+    expect(r.segmented).toBe(true);
+    for (const a of r.anchors) expect(Math.abs(a.videoTime - (lines[a.lineIndex].time + (lines[a.lineIndex].time < cut ? 10 : 30)))).toBeLessThanOrEqual(1);
+  });
+});

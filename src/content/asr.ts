@@ -126,11 +126,13 @@ function alignSynced(lines: LyricLine[], segs: TranscriptSeg[], win: { start: nu
   const hit = new Set(support.map((c) => lyr[c.j].line));
   // Tuned on the xmas fixtures: a wrong song still shares a few stock phrases ("in my", "you can") and a
   // repeated hook can pile up 7 votes on ~3 lines, so also require the votes to cover ≥ 4 distinct lines.
-  const confident = matches >= 6 && hit.size >= 4 && matches / cands.length >= 0.35;
+  const confident = matches >= 6 && hit.size >= 4 && shareOf(cands, (c) => Math.abs(c.off - offset) <= 1.5) >= 0.35;
 
   const split = splitRuns(lines, lyr, cands, offset);
   if (split) {
-    const ok = split.matches >= 6 && split.lines >= 4 && split.matches / cands.length >= 0.35;
+    const at = new Map(split.anchors.map((a) => [a.lineIndex, a.videoTime - lines[a.lineIndex].time]));
+    const fits = (c: { off: number; j: number }) => { const o = at.get(lyr[c.j].line); return o !== undefined && Math.abs(c.off - o) <= 1.5; };
+    const ok = split.matches >= 6 && split.lines >= 4 && shareOf(cands, fits) >= 0.35;
     return { offset: round(offset), anchors: split.anchors, matches: split.matches, confident: ok, segmented: true };
   }
 
@@ -224,6 +226,17 @@ function splitRuns(
     matches: kept.reduce((a, n) => a + Math.floor(n.score), 0),
     lines: kept.length,
   };
+}
+
+/**
+ * Share of matched caption bigrams (positions, not pairs) that back the chosen timing. Counting each
+ * caption position once keeps a hook sung 30 times ("thank u, next") from flooding the denominator
+ * with its 30 × 30 cross pairs, which made chorus-heavy songs look like weak matches.
+ */
+function shareOf<C extends { i: number }>(cands: C[], ok: (c: C) => boolean): number {
+  const any = new Set<number>(), good = new Set<number>();
+  for (const c of cands) { any.add(c.i); if (ok(c)) good.add(c.i); }
+  return any.size ? good.size / any.size : 0;
 }
 
 /* ---------------- plain ---------------- */
