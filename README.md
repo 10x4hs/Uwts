@@ -12,9 +12,9 @@ YouTube 노래 영상 옆에, 노래를 따라 차오르는 싱크 가사를 띄
 가사는 그때그때 각 서비스에서 불러와 보여 줄 뿐, 확장 프로그램에 들어 있지 않아요.
 
 <p align="center">
-  <img src="docs/media/demo.gif" width="720" alt="Uwts Lyrics 소개 영상 미리보기: 노래를 따라 가사가 차오르는 패널">
+  <img src="docs/media/demo.gif" width="720" alt="Uwts Lyrics 실제 화면: 아이유 Blueming에 맞춰 단어마다 차오르는 가사">
   <br>
-  <a href="https://github.com/10x4hs/Uwts/releases/download/v0.1.12/uwts-intro.mp4"><b>▶ 1분 소개 영상 보기 (mp4)</b></a>
+  <a href="https://github.com/10x4hs/Uwts/releases/download/v0.1.12/uwts-intro.mp4"><b>▶ 소개 영상 보기 (49초 · 소리 있음)</b></a>
 </p>
 
 ## 최근 업데이트
