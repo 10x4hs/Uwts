@@ -13,6 +13,18 @@
   <a href="https://github.com/10x4hs/Uwts/releases/download/v0.1.12/uwts-intro.mp4"><b>▶ 소개 영상 보기 (49초 · 소리 있음)</b></a>
 </p>
 
+## What's New
+
+**v0.1.14** · 2026-11-08
+- MV 길이에 맞춘 가사(예: BTS 'FAKE LOVE')가 6초쯤 늦게 나오던 문제를 고쳤어요.
+- 검색창: 지우기(X) 버튼이 잘 보이고, "제목 가수"가 미리 들어가요. 좁은 패널에서도 '닫기' 버튼이 밀려나지 않아요.
+
+**v0.1.13** · 원곡 대신 커버 가사가 잡히던 문제, 후렴이 많이 반복되는 노래의 싱크를 고쳤어요.
+
+**v0.1.12** · 작은 창(PiP), 노래 없는 구간 건너뛰기, 구간별 싱크, 다른 가사 버튼, 곡 카드, 업로더 자막이 추가됐어요.
+
+이전 기록은 [Releases](https://github.com/10x4hs/Uwts/releases)에 있어요.
+
 ## Install If possible, have the Aside do it.
 
 **① 받기** · **[⬇️ uwts-lyrics.zip 받기 (최신 버전)](https://github.com/10x4hs/Uwts/releases/latest/download/uwts-lyrics.zip)**
