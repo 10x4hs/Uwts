@@ -1,7 +1,6 @@
 /**
- * Updates for friends who load the extension unpacked from the private GitHub repo's Releases.
- * - checkUpdate: the latest release tag, read through the user's own github.com session
- *   (a private repo is only visible to invited collaborators who are signed in).
+ * Updates for people who load the extension unpacked from the GitHub repo's Releases.
+ * - checkUpdate: the latest release tag from github.com (public repo: no sign-in needed).
  * - reloadIfFilesChanged: after a friend unzips a new version over the folder, the files on disk
  *   are newer than the running code; reload so the new version runs without pressing ↻.
  *   The same check catches every local `npm run build` (dist/build.txt), so a dev copy loaded
