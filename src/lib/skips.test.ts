@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { compress, expand, parseSkips, skipAt, totalSkipped, within } from './skips';
+import { compress, expand, parseSkips, skipAt, timedToVideo, totalSkipped, within } from './skips';
 
 const seg = (a: number, b: number, extra: object = {}) => ({ category: 'music_offtopic', actionType: 'skip', segment: [a, b], votes: 1, ...extra });
 
@@ -29,5 +29,12 @@ describe('music_offtopic skips', () => {
 
   it('clips skips to a chapter and makes them chapter-relative', () => {
     expect(within([{ start: 0, end: 4 }, { start: 98, end: 110 }, { start: 300, end: 310 }], 100, 200)).toEqual([{ start: 0, end: 10 }]);
+  });
+
+  it('knows lyrics already timed to the music video', () => {
+    expect(timedToVideo(319, 319, 78)).toBe(true);   // MV-length lyrics: intro already inside
+    expect(timedToVideo(242, 319, 78)).toBe(false);  // album-length lyrics: skips apply
+    expect(timedToVideo(undefined, 319, 78)).toBe(false);
+    expect(timedToVideo(200, 201, 1.5)).toBe(false); // too little skipped to tell apart
   });
 });

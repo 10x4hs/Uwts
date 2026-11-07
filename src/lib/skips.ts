@@ -73,3 +73,10 @@ export function skipAt(skips: Skip[], t: number): Skip | null {
 export function totalSkipped(skips: Skip[], upTo = Infinity): number {
   return skips.reduce((a, s) => a + Math.max(0, Math.min(s.end, upTo) - s.start), 0);
 }
+
+/** Lyrics timed to the music video itself (an "MV version" as long as the video, intro included)
+ *  already run on video time: removing the non-music parts again would shift them twice. */
+export function timedToVideo(trackDuration: number | undefined, videoDuration: number | undefined, skipped: number): boolean {
+  if (!trackDuration || !videoDuration || skipped < 1) return false;
+  return Math.abs(trackDuration - videoDuration) <= 3 && Math.abs(trackDuration - (videoDuration - skipped)) > 3;
+}

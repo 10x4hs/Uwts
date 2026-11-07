@@ -11,7 +11,7 @@ import { VocalTracker } from './audio';
 import { addAnchor, timedLines, parseAnchors, groupByMatch, type Anchor } from './anchors';
 import { timelineParams, parseTimeline, songChapters, type Timeline } from '../lib/timeline';
 import { commentsToken, parseComments, pickTracklist } from '../lib/comments';
-import { compress, expand, skipAt, totalSkipped, within, type Skip } from '../lib/skips';
+import { compress, expand, skipAt, timedToVideo, totalSkipped, within, type Skip } from '../lib/skips';
 import { alignToTranscript, captionWordCount, captionLyrics, type TranscriptSeg } from './asr';
 import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, displayTitle, displayArtist, type Action, type PanelState } from './state';
 
@@ -917,7 +917,10 @@ class Panel {
 
   /** Skips apply to source lyrics; hand-set anchors and caption lyrics are already in video time. */
   useSkips(): boolean {
-    return !this.anchors.length && !this.fromCaptions && this.skipsAll.length > 0;
+    if (this.anchors.length || this.fromCaptions || !this.skipsAll.length) return false;
+    const vd = this.chapterIndex >= 0 ? undefined : (this.currentDuration() ?? this.metaDuration);
+    const skipped = totalSkipped(within(this.skipsAll, this.chapterStart));
+    return !timedToVideo((this.state.result as Cand | null)?.duration, vd, skipped);
   }
 
   /** Chapter-relative song time of a video time: the song stands still in non-music parts. */
