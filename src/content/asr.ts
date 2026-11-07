@@ -11,6 +11,9 @@ export interface AsrAlignment {
   /** Supporting word matches. */
   matches: number;
   confident: boolean;
+  /** Synced: the video moves the song by different amounts in different parts (a skit or cut mid-song);
+   *  `anchors` then carry each part's own offset. */
+  segmented?: boolean;
 }
 
 /*
@@ -125,6 +128,12 @@ function alignSynced(lines: LyricLine[], segs: TranscriptSeg[], win: { start: nu
   // repeated hook can pile up 7 votes on ~3 lines, so also require the votes to cover ≥ 4 distinct lines.
   const confident = matches >= 6 && hit.size >= 4 && matches / cands.length >= 0.35;
 
+  const split = splitRuns(lines, lyr, cands, offset);
+  if (split) {
+    const ok = split.matches >= 6 && split.lines >= 4 && split.matches / cands.length >= 0.35;
+    return { offset: round(offset), anchors: split.anchors, matches: split.matches, confident: ok, segmented: true };
+  }
+
   const anchors: AsrAlignment['anchors'] = [];
   for (const li of [...hit].sort((a, b) => a - b)) {
     const v = lines[li].time + offset;
@@ -132,6 +141,89 @@ function alignSynced(lines: LyricLine[], segs: TranscriptSeg[], win: { start: nu
     if (!last || v > last.videoTime) anchors.push({ lineIndex: li, videoTime: round(v) });
   }
   return { offset: round(offset), anchors, matches, confident };
+}
+
+/*
+ * Per-part offsets. A music video can stretch the song: a skit or a dance break in the middle moves
+ * every later line by its length, so one offset fits only one side. Votes then form several offset
+ * peaks; each lyric line picks the peak its bigrams back, and the heaviest chain that keeps both line
+ * order and video time (with a cost per offset change, so a repeated chorus can't flip back and forth)
+ * decides where the song shifts. Parts must span ≥ RUN_LINES lines and differ by > MIN_SHIFT s,
+ * otherwise it's one offset.
+ */
+const PEAK_VOTES = 6;
+const RUN_LINES = 3;
+const RUN_VOTES = 4;
+const SWITCH_COST = 4;
+/** Caption timing wobbles by a second or two; only bigger jumps are real cuts or skits. */
+const MIN_SHIFT = 3;
+
+function splitRuns(
+  lines: LyricLine[], lyr: Word[], cands: { off: number; j: number }[], global: number,
+): { anchors: AsrAlignment['anchors']; matches: number; lines: number } | null {
+  const bins = new Map<number, number>();
+  for (const c of cands) { const b = Math.floor(c.off); bins.set(b, (bins.get(b) ?? 0) + 1); }
+  const sm = (b: number) => (bins.get(b - 1) ?? 0) + (bins.get(b) ?? 0) + (bins.get(b + 1) ?? 0);
+  const raw: { off: number; s: number }[] = [];
+  for (const b of bins.keys()) {
+    const s = sm(b);
+    if (s < PEAK_VOTES || s < sm(b - 1) || s < sm(b + 1)) continue;
+    const near = cands.filter((c) => Math.abs(c.off - (b + 0.5)) <= 1.5).map((c) => c.off).sort((x, y) => x - y);
+    raw.push({ off: near[near.length >> 1], s });
+  }
+  raw.sort((a, b) => b.s - a.s);
+  const peaks: number[] = [];
+  for (const p of raw) if (peaks.length < 4 && peaks.every((q) => Math.abs(q - p.off) > MIN_SHIFT)) peaks.push(p.off);
+  if (peaks.length < 2) return null;
+  const home = peaks.reduce((k, q, i) => (Math.abs(q - global) < Math.abs(peaks[k] - global) ? i : k), 0);
+
+  // votes[line][peak]
+  const votes = new Map<number, number[]>();
+  for (const c of cands) {
+    const line = lyr[c.j].line;
+    peaks.forEach((q, p) => {
+      if (Math.abs(c.off - q) > 1.5) return;
+      const v = votes.get(line) ?? votes.set(line, peaks.map(() => 0)).get(line)!;
+      v[p]++;
+    });
+  }
+  interface Node { line: number; p: number; t: number; score: number }
+  const nodes: Node[] = [];
+  for (const [line, v] of votes) v.forEach((n, p) => {
+    if (n > 0) nodes.push({ line, p, t: lines[line].time + peaks[p], score: n + (p === home ? 0.25 : 0) });
+  });
+  nodes.sort((a, b) => a.line - b.line || a.t - b.t);
+  const dp = nodes.map((n) => n.score), prev = nodes.map(() => -1);
+  for (let b = 0; b < nodes.length; b++)
+    for (let a = 0; a < b; a++) {
+      if (nodes[a].line >= nodes[b].line || nodes[a].t >= nodes[b].t) continue;
+      const v = dp[a] - (nodes[a].p !== nodes[b].p ? SWITCH_COST : 0) + nodes[b].score;
+      if (v > dp[b]) { dp[b] = v; prev[b] = a; }
+    }
+  let end = 0;
+  for (let b = 1; b < nodes.length; b++) if (dp[b] > dp[end]) end = b;
+  const chain: Node[] = [];
+  for (let k = end; k >= 0; k = prev[k]) chain.unshift(nodes[k]);
+
+  // runs of one offset; short runs are noise (a chorus line matching elsewhere)
+  let runs: Node[][] = [];
+  for (const n of chain) {
+    const r = runs[runs.length - 1];
+    if (r && r[0].p === n.p) r.push(n); else runs.push([n]);
+  }
+  runs = runs.filter((r) => r.length >= RUN_LINES && r.reduce((a, n) => a + Math.floor(n.score), 0) >= RUN_VOTES);
+  const merged: Node[][] = [];
+  for (const r of runs) {
+    const last = merged[merged.length - 1];
+    if (last && last[0].p === r[0].p) last.push(...r); else merged.push([...r]);
+  }
+  if (merged.length < 2) return null;
+  const kept = merged.flat();
+  return {
+    anchors: kept.map((n) => ({ lineIndex: n.line, videoTime: round(n.t) })),
+    matches: kept.reduce((a, n) => a + Math.floor(n.score), 0),
+    lines: kept.length,
+  };
 }
 
 /* ---------------- plain ---------------- */

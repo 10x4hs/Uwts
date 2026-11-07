@@ -353,3 +353,37 @@ html.uw-fs-dock ytd-watch-flexy[fullscreen] #full-bleed-container {
 .uw-fs-btn[aria-pressed='true'] { color: #fff; }
 .uw-fs-btn[aria-pressed='false'] { opacity: .7; }
 .uw-break.uw-break-intro.uw-break-on { margin-top: 0; margin-bottom: 18px; }
+
+/* ---------- song card: the next song of a playlist announces itself ---------- */
+.uw-songcard {
+  position: absolute; left: 16px; right: 16px; top: 50%; z-index: 6;
+  display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 20px;
+  background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.24);
+  backdrop-filter: blur(22px) saturate(170%); -webkit-backdrop-filter: blur(22px) saturate(170%);
+  box-shadow: inset 1px 1px 0 rgba(255,255,255,.45), 0 12px 40px rgba(0,0,0,.35);
+  opacity: 0; transform: translateY(calc(-50% + 14px)) scale(.97); pointer-events: none;
+  transition: opacity .35s ease, transform .5s cubic-bezier(.2,.9,.25,1);
+}
+.uw-songcard-on { opacity: 1; transform: translateY(-50%) scale(1); }
+.uw-songcard-no {
+  flex: none; min-width: 44px; height: 44px; padding: 0 8px; border-radius: 14px; display: grid; place-items: center;
+  background: var(--uw-glow); color: #111; font-weight: 800; font-size: 15px; font-variant-numeric: tabular-nums;
+}
+.uw-songcard-txt { min-width: 0; flex: 1; }
+.uw-songcard-kicker { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: rgba(255,255,255,.65); }
+.uw-songcard-title { margin-top: 2px; font-size: 17px; font-weight: 800; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.uw-songcard-artist { margin-top: 2px; font-size: 13px; color: rgba(255,255,255,.75); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.uw-collapsed .uw-songcard, .uw-searching .uw-songcard, .uw-listing .uw-songcard { display: none; }
+.uw-songcard-on ~ .uw-body .uw-lyrics { opacity: .35; transition: opacity .35s; }
+@media (prefers-reduced-motion: reduce) { .uw-songcard { transition: opacity .2s; transform: translateY(-50%); } }
+
+/* narrow panel: four header buttons must still leave room for the song title */
+.uw-panel { container-type: inline-size; container-name: uw; }
+@container uw (max-width: 380px) {
+  .uw-header { gap: 6px; }
+  .uw-header .uw-chip { width: 34px; height: 34px; min-width: 34px; min-height: 34px; }
+  .uw-thumb { width: 40px; height: 40px; }
+}
+@container uw (max-width: 330px) { .uw-thumb { display: none; } }
+.uw-pip-btn[hidden] { display: none; }
+.uw-switch-btn[hidden], .uw-panel .uw-intro-btn[hidden] { display: none; }

@@ -1,3 +1,4 @@
+import type { Skip } from '../lib/skips';
 import type { LyricLine, LyricsResult, Palette, ResolveContext, SongQuery } from './types';
 
 export type Request =
@@ -9,6 +10,8 @@ export type Request =
   | { type: 'perm:status' }
   | { type: 'perm:open' }
   | { type: 'update:status' }
+  | { type: 'skips:get'; videoId: string; duration?: number }
+  | { type: 'asset:css' }
   | { type: 'lyrics:words'; artist: string; title: string; duration?: number; lines: LyricLine[] };
 
 export type Response<R extends Request> =
@@ -18,6 +21,8 @@ export type Response<R extends Request> =
   R extends { type: 'perm:status' } ? { ok: true; granted: boolean } :
   R extends { type: 'perm:open' } ? { ok: true } :
   R extends { type: 'lyrics:words' } ? { ok: true; lines: LyricLine[] | null } | { ok: false; error: string } :
+  R extends { type: 'skips:get' } ? { ok: true; skips: Skip[] } | { ok: false; error: string } :
+  R extends { type: 'asset:css' } ? { ok: true; css: string } | { ok: false; error: string } :
   R extends { type: 'update:status' } ? { ok: true; current: string; latest?: string; url?: string } :
   R extends { type: 'lyrics:resolve' } ? { ok: true; result: LyricsResult | null; candidates: LyricsResult[]; query: SongQuery; picked?: boolean } | { ok: false; error: string } :
   R extends { type: 'video:meta' } ? { ok: true; title: string; channel: string; description?: string; duration?: number } | { ok: false; error: string } : never;

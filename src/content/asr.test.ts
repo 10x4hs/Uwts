@@ -65,6 +65,7 @@ describe('alignToTranscript: synced fixtures', () => {
       const lines = loadLines(c.name);
       const r = alignToTranscript(lines, segs, c.window)!;
       expect(r.confident).toBe(true);
+      expect(r.segmented ?? false).toBe(false); // real songs in one piece: no false split
       expect(r.offset!).toBeGreaterThanOrEqual(c.offset[0]);
       expect(r.offset!).toBeLessThanOrEqual(c.offset[1]);
       expect(r.anchors.length).toBeGreaterThanOrEqual(6);
@@ -166,5 +167,44 @@ describe('captions as lyrics', () => {
       { time: 10, text: "We don't erase the trembling" },
       { time: 15.27, text: 'We just learn where the triggers are' },
     ]);
+  });
+});
+
+describe('alignToTranscript: per-part offsets', () => {
+  /** Captions singing `lines` with offset off(t) (t = lyric time), 5 words per segment, every 5th word misheard. */
+  function sing(lines: LyricLine[], off: (t: number) => number): TranscriptSeg[] {
+    const words: { w: string; t: number }[] = [];
+    lines.forEach((l, i) => {
+      const ws = normalizeWords(l.text);
+      const next = lines[i + 1]?.time ?? l.time + 4;
+      const step = Math.min(0.6, (next - l.time) / Math.max(1, ws.length));
+      ws.forEach((w, k) => words.push({ w: words.length % 5 === 4 ? 'zzz' : w, t: l.time + k * step + off(l.time) }));
+    });
+    const out: TranscriptSeg[] = [];
+    for (let k = 0; k < words.length; k += 5) out.push({ time: words[k].t, text: words.slice(k, k + 5).map((x) => x.w).join(' ') });
+    return out;
+  }
+
+  test('a 20 s skit in the middle: lines after it get their own offset', () => {
+    const lines = loadLines('winter-wonderland');
+    const cut = lines[Math.floor(lines.length / 2)].time;
+    const r = alignToTranscript(lines, sing(lines, (t) => (t < cut ? 8 : 28)), { start: 0, end: 40 })!;
+    expect(r.confident).toBe(true);
+    expect(r.segmented).toBe(true);
+    increasing(r.anchors);
+    for (const a of r.anchors) {
+      const want = lines[a.lineIndex].time + (lines[a.lineIndex].time < cut ? 8 : 28);
+      expect(Math.abs(a.videoTime - want)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  test('one offset with repeated choruses stays one offset', () => {
+    for (const name of ['winter-wonderland', 'the-christmas-song']) {
+      const lines = loadLines(name);
+      if (lines[0].time < 0) continue;
+      const r = alignToTranscript(lines, sing(lines, () => 12.4), { start: 0, end: 30 })!;
+      expect(r.segmented ?? false).toBe(false);
+      expect(Math.abs(r.offset! - 12.4)).toBeLessThanOrEqual(0.5);
+    }
   });
 });

@@ -11,6 +11,7 @@ import { VocalTracker } from './audio';
 import { addAnchor, timedLines, parseAnchors, groupByMatch, type Anchor } from './anchors';
 import { timelineParams, parseTimeline, songChapters, type Timeline } from '../lib/timeline';
 import { commentsToken, parseComments, pickTracklist } from '../lib/comments';
+import { compress, expand, skipAt, totalSkipped, within, type Skip } from '../lib/skips';
 import { alignToTranscript, captionWordCount, captionLyrics, type TranscriptSeg } from './asr';
 import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, displayTitle, displayArtist, type Action, type PanelState } from './state';
 
@@ -47,7 +48,9 @@ const BREAK_EXIT_SEC = 0.6;
 const WAVE_BARS = 32;
 /** Same-origin InnerTube call from the YouTube page itself: no extension host permission needed,
  *  and it returns the full (untruncated) description and exact length for this exact videoId. */
-async function metaInPage(videoId: string): Promise<{ title: string; channel: string; description: string; duration?: number } | null> {
+interface PageMeta { title: string; channel: string; description: string; duration?: number }
+interface PlayerJson { videoDetails?: { videoId?: string; title?: string; author?: string; shortDescription?: string; lengthSeconds?: string } }
+async function metaInPage(videoId: string): Promise<PageMeta | null> {
   try {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), 4000);
@@ -57,7 +60,8 @@ async function metaInPage(videoId: string): Promise<{ title: string; channel: st
       body: JSON.stringify({ videoId, context: { client: { clientName: 'WEB', clientVersion: '2.20241023.01.00', hl: 'ko' } } }),
     }).finally(() => clearTimeout(timer));
     if (!res.ok) return null;
-    const v = ((await res.json()) as { videoDetails?: { videoId?: string; title?: string; author?: string; shortDescription?: string; lengthSeconds?: string } }).videoDetails;
+    const j = (await res.json()) as PlayerJson;
+    const v = j.videoDetails;
     if (!v?.title || (v.videoId && v.videoId !== videoId)) return null;
     return { title: v.title, channel: v.author ?? '', description: v.shortDescription ?? '', duration: Number(v.lengthSeconds) || undefined };
   } catch {
@@ -66,6 +70,27 @@ async function metaInPage(videoId: string): Promise<{ title: string; channel: st
 }
 
 /** YouTube's "동영상 정보 → 타임라인" panel: Content ID song cards + auto-captions, same-origin like the player call. */
+/** Caption tracks of the playing video, asked from YouTube's player through page.js (page world). */
+async function playerCaptions(videoId: string): Promise<{ uploader: string[]; category: string | null } | null> {
+  for (let i = 0; i < 12; i++) {
+    const got = await new Promise<string | null>((resolve) => {
+      const on = (e: Event) => { clearTimeout(timer); resolve(typeof (e as CustomEvent).detail === 'string' ? (e as CustomEvent).detail : null); };
+      const timer = setTimeout(() => { document.removeEventListener('uw:captions', on); resolve(null); }, 300);
+      document.addEventListener('uw:captions', on, { once: true });
+      document.dispatchEvent(new CustomEvent('uw:captions?'));
+    });
+    try {
+      const v = got ? JSON.parse(got) as { videoId?: string | null; uploader?: string[]; category?: string | null } : null;
+      if (v?.videoId === videoId) return { uploader: v.uploader ?? [], category: v.category ?? null };
+    } catch { /* retry */ }
+    await sleep(500); // SPA navigation: the player may still hold the previous video
+  }
+  return null;
+}
+
+/** Titles that say "this is a song" when YouTube's category doesn't (MVs filed under Entertainment). */
+const SONG_TITLE_RE = /\bm\/?v\b|music\s*video|lyrics?|official\s*(audio|video)|뮤직\s*비디오|뮤비|가사|자작곡|커버|cover|\bost\b|노래/i;
+
 async function timelineInPage(videoId: string): Promise<Timeline | null> {
   try {
     const ctl = new AbortController();
@@ -178,6 +203,7 @@ const ICON_CHEVRON = 'M6 15l6-6 6 6';
 const ICON_CLOUD_OFF = 'M3 3l18 18M8.5 8.6A5.5 5.5 0 0 0 7 19h9.5M19.6 16.4A4 4 0 0 0 17 9h-.6A6 6 0 0 0 10 5.3';
 const ICON_NOTE = 'M9 18V6l10-2v12M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3ZM19 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3Z';
 const ICON_LIST = 'M4 6h11M4 12h11M4 18h7M18 15V6l3 1.5M18 15a2 2 0 1 1-2-2 2 2 0 0 1 2 2Z';
+const ICON_PIP = 'M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5M3 6v11a2 2 0 0 0 2 2h5M13 14h8v6h-8Z';
 const ICON_REFRESH = 'M20 11a8 8 0 1 0-2.3 5.7M20 5v6h-6';
 const UPDATED_ERROR = 'extension-updated';
 /** false once the extension is reloaded/removed under an open tab (orphaned content script). */
@@ -255,7 +281,11 @@ class Panel {
   manualTimer = 0;
   disposers: (() => void)[] = [];
 
-  // sync: lyricTime = videoTime - chapterStart - syncOffset
+  /** SponsorBlock non-music parts of the whole video (absolute video seconds) */
+  skipsAll: Skip[] = [];
+  skipsTold = false;
+
+  // sync: lyricTime = songTime(videoTime) - syncOffset, songTime = chapter-relative minus skipped parts
   syncOffset = 0;
   manualSync = false;
   tracker: VocalTracker | null = null;
@@ -268,6 +298,8 @@ class Panel {
   timed: LyricLine[] | null = null;
   anchorSeq = 0;
   resetBtn = el('button', 'uw-btn uw-chip uw-sync-btn uw-reset-btn', '싱크 초기화');
+  /** next lyrics candidate in one click (the pick is remembered for this video/song) */
+  switchBtn = el('button', 'uw-btn uw-chip uw-sync-btn uw-switch-btn', '다른 가사');
   // sync mode: one button, then tap the line that is being sung right now
   syncMode = false;
   syncBtn = el('button', 'uw-btn uw-chip uw-sync-btn uw-sync-toggle', '싱크 맞추기');
@@ -281,12 +313,23 @@ class Panel {
   introText = el('span', 'uw-intro-text', '');
   introBtn = el('button', 'uw-btn uw-chip uw-intro-btn', '지금 시작됐어요');
   toastEl = el('div', 'uw-toast');
+  /** "다음 곡" card when a playlist moves on to another song */
+  cardEl = el('div', 'uw-songcard');
+  cardNo = el('div', 'uw-songcard-no');
+  cardKicker = el('div', 'uw-songcard-kicker');
+  cardTitle = el('div', 'uw-songcard-title');
+  cardArtist = el('div', 'uw-songcard-artist');
+  cardIndex = -1;
+  cardTimer = 0;
   resizeEl = el('button', 'uw-resize');
   /** fullscreen: our toggle in YouTube's quick-action row, and whether the lyrics column is shown */
   fsBtn: HTMLButtonElement | null = null;
   fsShown = true;
   fsWasCollapsed = false;
   size: { w: number; h: number } | null = null;
+  /** the lyrics' own always-on-top window (Document Picture-in-Picture), while open */
+  pipWin: Window | null = null;
+  pipBtn = el('button', 'uw-btn uw-chip uw-pip-btn');
 
   constructor(videoId: string, token: number) {
     this.videoId = videoId;
@@ -335,7 +378,15 @@ class Panel {
     this.tracksEl.hidden = true;
     this.tracksEl.setAttribute('role', 'list');
     this.tracksEl.setAttribute('aria-label', '곡 목록');
-    header.append(this.thumb, meta, this.tracksBtn, searchBtn, this.collapseBtn);
+    this.pipBtn.type = 'button';
+    this.pipBtn.hidden = !pipSupported();
+    this.pipBtn.setAttribute('aria-label', '가사만 작은 창으로 띄우기');
+    this.pipBtn.title = '가사만 작은 창으로 띄우기 · 다른 탭에서도 보여요';
+    this.pipBtn.setAttribute('aria-pressed', 'false');
+    this.pipBtn.append(icon(ICON_PIP));
+    // the page-world helper (page.js) opens the window on this click; see openPip()
+    this.pipBtn.addEventListener('pointerenter', () => { this.pipBtn.dataset.w = String(this.root.offsetWidth || 400); });
+    header.append(this.thumb, meta, this.tracksBtn, this.pipBtn, searchBtn, this.collapseBtn);
     const wave = el('div', 'uw-wave');
     for (let i = 0; i < WAVE_BARS; i++) { const b = el('span'); wave.append(b); this.waveBars.push(b); }
     this.breakEl.setAttribute('aria-hidden', 'true');
@@ -349,7 +400,10 @@ class Panel {
     this.resetBtn.type = 'button';
     this.resetBtn.hidden = true;
     this.resetBtn.addEventListener('click', () => this.clearAnchors());
-    syncRow.append(this.resetBtn, this.syncBtn);
+    this.switchBtn.type = 'button';
+    this.switchBtn.hidden = true;
+    this.switchBtn.addEventListener('click', () => this.nextCandidate());
+    syncRow.append(this.switchBtn, this.resetBtn, this.syncBtn);
     this.syncHint.setAttribute('role', 'status');
     this.syncHint.append(el('span', 'uw-intro-note', '♪'), this.syncHintText);
     this.syncHint.hidden = true;
@@ -386,7 +440,12 @@ class Panel {
     }).catch(() => {});
     // intro bar sits outside the scrolling/faded lyrics body so it stays crisp
     this.buildResize();
-    this.root.append(this.bg, header, permBar, updBar, syncRow, this.syncHint, this.introEl, this.body, this.toastEl, this.resizeEl);
+    const cardTxt = el('div', 'uw-songcard-txt');
+    cardTxt.append(this.cardKicker, this.cardTitle, this.cardArtist);
+    this.cardEl.append(this.cardNo, cardTxt);
+    this.cardEl.setAttribute('role', 'status');
+    this.cardEl.setAttribute('aria-live', 'polite');
+    this.root.append(this.bg, header, permBar, updBar, syncRow, this.syncHint, this.introEl, this.cardEl, this.body, this.toastEl, this.resizeEl);
     // Keep typing inside the panel away from YouTube's global hotkeys (t = theater, f = fullscreen,
     // k/j/l = playback, / = search...), which otherwise fire while the user types a song name.
     for (const type of ['keydown', 'keypress', 'keyup'] as const) {
@@ -431,7 +490,7 @@ class Panel {
       if (this.syncMode) { if (line?.dataset.index && this.video) this.tapLine(Number(line.dataset.index), this.video.currentTime); return; }
       const t = line?.dataset.time;
       if (t != null && t !== '' && this.video && Number(t) >= 0) {
-        this.video.currentTime = Number(t) + this.chapterStart + this.syncOffset;
+        this.video.currentTime = this.videoTimeOf(Number(t) + this.syncOffset);
         this.resetManualScroll(); // jumping to a line ends browsing: follow from there
       }
     });
@@ -455,6 +514,7 @@ class Panel {
    *  put the same panel back without losing its state. */
   rehost(): boolean {
     if (this.root.isConnected) return true;
+    if (this.pipWin) return false;
     const host = document.querySelector('#secondary-inner') ?? document.querySelector('#secondary');
     if (!host || !(host as HTMLElement).offsetParent) return false;
     host.prepend(this.root);
@@ -465,6 +525,7 @@ class Panel {
    *  full-height column on the right (the video shrinks beside it, like YouTube's own side panels),
    *  and put it back in the side column when fullscreen ends. */
   onFullscreen() {
+    if (this.pipWin) return; // the lyrics are in their own window
     const fs = document.fullscreenElement;
     if (fs && fs.querySelector('video')) {
       if (!this.root.classList.contains('uw-fs')) {
@@ -482,7 +543,43 @@ class Panel {
       if (this.fsWasCollapsed) this.setCollapsed(true, false);
       this.applyFsDock();
     }
-    if (this.timed && this.tracksEl.hidden) requestAnimationFrame(() => this.follow());
+    if (this.timed && this.tracksEl.hidden) this.frame(() => this.follow());
+  }
+
+  /** Move the whole panel (same nodes, same state) into the PiP window. */
+  enterPip(w: Window) {
+    this.pipWin = w;
+    if (this.root.classList.contains('uw-fs')) { this.root.classList.remove('uw-fs', 'uw-fs-hidden'); document.documentElement.classList.remove('uw-fs-dock'); }
+    this.root.classList.add('uw-pip');
+    this.root.classList.remove('uw-collapsed');
+    w.document.body.append(this.root);
+    this.pipBtn.setAttribute('aria-pressed', 'true');
+    this.pipBtn.setAttribute('aria-label', '가사를 원래 자리로 돌려놓기');
+    this.pipBtn.title = '원래 자리로 돌려놓기';
+    this.tracker?.setFrameWindow(w);
+    if (this.video && !this.video.paused) this.startLoop();
+    this.updatePaused();
+    this.refresh();
+    this.frame(() => this.follow());
+  }
+
+  /** PiP closed: back to YouTube's side column. */
+  leavePip() {
+    if (!this.pipWin) return;
+    this.pipWin = null;
+    this.root.classList.remove('uw-pip');
+    this.root.remove();
+    this.setCollapsed(collapsedPref, false);
+    this.rehost();
+    if (document.fullscreenElement) this.onFullscreen();
+    this.pipBtn.setAttribute('aria-pressed', 'false');
+    this.pipBtn.setAttribute('aria-label', '가사만 작은 창으로 띄우기');
+    this.pipBtn.title = '가사만 작은 창으로 띄우기 · 다른 탭에서도 보여요';
+    this.tracker?.setFrameWindow(window);
+    if (this.video && !this.video.paused) this.startLoop();
+    this.updatePaused();
+    this.refresh();
+    this.frame(() => this.follow());
   }
 
   /** Show/hide the docked lyrics column (fullscreen only); remembered for next time. */
@@ -490,7 +587,7 @@ class Panel {
     this.fsShown = on;
     if (persist) chrome.storage?.local.set({ [FS_KEY]: on }).catch(() => {});
     this.applyFsDock();
-    if (on && this.timed) requestAnimationFrame(() => this.follow());
+    if (on && this.timed) this.frame(() => this.follow());
   }
 
   applyFsDock() {
@@ -543,7 +640,7 @@ class Panel {
   mount(): boolean {
     const host = document.querySelector('#secondary-inner') ?? document.querySelector('#secondary');
     if (!host) return false;
-    host.prepend(this.root);
+    if (pip) this.enterPip(pip); else host.prepend(this.root);
     // next video while still fullscreen (playlist autoplay): show up over the video right away
     if (document.fullscreenElement) this.onFullscreen();
     // The extension was reloaded/updated under this tab: this script is orphaned and every chrome.*
@@ -576,16 +673,18 @@ class Panel {
     chrome.storage?.local.get(COLLAPSE_KEY).then((r) => {
       if (this.alive) this.setCollapsed(Boolean(r[COLLAPSE_KEY]), false);
     }).catch(() => {});
+    if (pipSupported()) void panelCss(); // ready before the PiP window opens
     void this.identify();
   }
 
   destroy() {
     this.destroyed = true;
-    cancelAnimationFrame(this.raf);
+    this.stopLoop();
     clearTimeout(this.retryTimer);
     clearTimeout(this.searchTimer);
     clearTimeout(this.manualTimer);
     clearTimeout(this.toastTimer);
+    clearTimeout(this.cardTimer);
     clearInterval(this.estTimer);
     this.tracker?.destroy();
     this.disposers.forEach((d) => d());
@@ -664,7 +763,7 @@ class Panel {
   }
 
   updatePaused() {
-    this.root.classList.toggle('uw-idle', document.hidden || this.root.classList.contains('uw-collapsed'));
+    this.root.classList.toggle('uw-idle', (document.hidden && !this.pipWin) || this.root.classList.contains('uw-collapsed'));
   }
 
   dispatch(a: Action) {
@@ -686,10 +785,9 @@ class Panel {
     if (!v) return;
     this.video = v;
     this.tracker = new VocalTracker(v);
-    const loop = () => { this.tick(); this.raf = requestAnimationFrame(loop); };
     const sync = () => this.root.classList.toggle('uw-vpaused', v.paused);
-    const onPlay = () => { sync(); cancelAnimationFrame(this.raf); this.raf = requestAnimationFrame(loop); };
-    const onPause = () => { sync(); cancelAnimationFrame(this.raf); this.tick(); };
+    const onPlay = () => { sync(); this.startLoop(); };
+    const onPause = () => { sync(); this.stopLoop(); this.tick(); };
     const onTime = () => { if (v.paused) this.tick(); };
     const refill = () => { this.tick(); this.applyFill(true); };
     const flexy = document.querySelector('ytd-watch-flexy');
@@ -710,6 +808,17 @@ class Panel {
     if (!v.paused) onPlay();
   }
 
+  // frames come from the PiP window while the lyrics live there: a hidden YouTube tab gets none
+  rafWin: Window = window;
+  loopFn = () => { this.tick(); this.raf = this.rafWin.requestAnimationFrame(this.loopFn); };
+  stopLoop() { try { this.rafWin.cancelAnimationFrame(this.raf); } catch { /* PiP window gone */ } }
+  startLoop() {
+    this.stopLoop();
+    this.rafWin = this.pipWin ?? window;
+    this.raf = this.rafWin.requestAnimationFrame(this.loopFn);
+  }
+  frame(cb: () => void) { (this.pipWin ?? window).requestAnimationFrame(cb); }
+
   tick() {
     // YouTube re-renders its quick-action row now and then: keep our fullscreen toggle in it
     if (this.fsBtn && !this.fsBtn.isConnected && this.root.classList.contains('uw-fs')) this.ensureFsButton();
@@ -723,10 +832,19 @@ class Panel {
     const lines = this.timed;
     if (!lines) return;
     const lt = this.lyricTime();
+    // inside a non-music part (skit, talk): the song waits, say so instead of a frozen line
+    const skip = this.useSkips() ? skipAt(this.skips(), t - this.chapterStart) : null;
     const intro = isIntro(lines, lt);
-    this.root.classList.toggle('uw-intro-on', intro);
-    if (this.introEl.hidden === intro) this.introEl.hidden = !intro;
-    if (intro && lines.length) {
+    const bar = intro || !!skip;
+    this.root.classList.toggle('uw-intro-on', bar);
+    this.root.classList.toggle('uw-skip-on', !!skip);
+    if (this.introEl.hidden === bar) this.introEl.hidden = !bar;
+    this.introBtn.hidden = !!skip;
+    if (skip) {
+      const left = Math.max(0, Math.ceil(skip.end - (t - this.chapterStart)));
+      const txt = `${lt < (lines[0]?.time ?? 0) ? '노래 전 영상이에요' : '노래가 잠깐 멈춘 구간이에요'} · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} 후 이어져요`;
+      if (this.introText.textContent !== txt) this.introText.textContent = txt;
+    } else if (intro && lines.length) {
       const left = Math.max(0, Math.round(lines[0].time - lt));
       const txt = left >= BREAK_MIN_SEC ? '노래 시작 전이에요' : `노래 시작 전 · 약 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} 후`;
       if (this.introText.textContent !== txt) this.introText.textContent = txt;
@@ -787,7 +905,62 @@ class Panel {
   }
 
   lyricTime(): number {
-    return (this.video?.currentTime ?? 0) - this.chapterStart - this.syncOffset;
+    return this.songTime(this.video?.currentTime ?? 0) - this.syncOffset;
+  }
+
+  /** Non-music parts of the current song, chapter-relative. */
+  skips(): Skip[] {
+    if (!this.skipsAll.length) return [];
+    const end = this.chapterIndex >= 0 ? (chapterAt(this.chapters, this.chapterStart)?.end ?? Infinity) : Infinity;
+    return within(this.skipsAll, this.chapterStart, end);
+  }
+
+  /** Skips apply to source lyrics; hand-set anchors and caption lyrics are already in video time. */
+  useSkips(): boolean {
+    return !this.anchors.length && !this.fromCaptions && this.skipsAll.length > 0;
+  }
+
+  /** Chapter-relative song time of a video time: the song stands still in non-music parts. */
+  songTime(videoTime: number): number {
+    const r = videoTime - this.chapterStart;
+    return this.useSkips() ? compress(this.skips(), r) : r;
+  }
+
+  /** Video time where song time `t` plays (inverse of songTime). */
+  videoTimeOf(t: number): number {
+    return this.chapterStart + (this.useSkips() ? expand(this.skips(), t) : t);
+  }
+
+  /** Captions on the song's own clock, so caption alignment and the skip map don't count a skit twice. */
+  songTranscript(): TranscriptSeg[] {
+    if (!this.useSkips()) return this.transcript;
+    const sk = this.skips();
+    if (!sk.length) return this.transcript;
+    return this.transcript.map((x) => (x.time < this.chapterStart || skipAt(sk, x.time - this.chapterStart)
+      ? { time: NaN, text: x.text }
+      : { time: this.chapterStart + compress(sk, x.time - this.chapterStart), text: x.text }));
+  }
+
+  /** SponsorBlock's community-marked non-music parts (skits, talk, drama intros) for this video. */
+  async loadSkips() {
+    const res = await send({ type: 'skips:get', videoId: this.videoId, duration: this.metaDuration }).catch(() => null);
+    if (!res?.ok || !res.skips.length || !this.alive) return;
+    this.skipsAll = res.skips;
+    this.root.dataset.skips = res.skips.map((x) => `${x.start.toFixed(1)}-${x.end.toFixed(1)}`).join(',');
+    if (!this.state.result) return;
+    this.applyPrior();
+    this.applyAsr();
+    this.render();
+    this.tellSkips();
+  }
+
+  /** One quiet note the first time a skipped part matters for the shown lyrics. */
+  tellSkips() {
+    if (this.skipsTold || !this.useSkips() || !this.timed) return;
+    const sec = Math.round(totalSkipped(this.skips()));
+    if (sec < 3) return;
+    this.skipsTold = true;
+    this.showToast(`노래 없는 구간 ${sec}초를 빼고 맞췄어요`);
   }
 
   /** Re-evaluate the active line and restart the fill after an offset change. */
@@ -873,6 +1046,19 @@ class Panel {
     this.video.currentTime = c.start + 0.05;
     this.showToast(`${clock(c.start)}로 이동했어요`);
     this.tick();
+  }
+
+  /** Big "n번째 곡" card over the lyrics for a moment when a playlist moves to another song. */
+  showSongCard(index: number, title: string, artist: string) {
+    this.cardNo.textContent = String(index + 1);
+    this.cardKicker.textContent = `${index + 1} / ${this.chapters.length}곡`;
+    this.cardTitle.textContent = displayTitle(title);
+    this.cardArtist.textContent = artist ? displayArtist(artist) : '';
+    this.cardEl.classList.remove('uw-songcard-on');
+    void this.cardEl.offsetWidth;
+    this.cardEl.classList.add('uw-songcard-on');
+    clearTimeout(this.cardTimer);
+    this.cardTimer = window.setTimeout(() => this.cardEl.classList.remove('uw-songcard-on'), 2800);
   }
 
   showToast(text: string) {
@@ -990,8 +1176,8 @@ class Panel {
     const res = this.state.result;
     if (this.manualSync || this.asrSynced || this.anchors.length || !this.tracker?.ready || this.state.status !== 'synced' || !res) return;
     const onsets = this.tracker.onsets
-      .filter((o) => o.t >= this.chapterStart)
-      .map((o) => ({ t: o.t - this.chapterStart, s: o.s }));
+      .filter((o) => o.t >= this.chapterStart && !(this.useSkips() && skipAt(this.skips(), o.t - this.chapterStart)))
+      .map((o) => ({ t: this.songTime(o.t), s: o.s }));
     if (onsets.length < 2 || onsets[onsets.length - 1].t - Math.min(...onsets.map((o) => o.t)) < MIN_COVERAGE) return;
     const e = estimateOffset(onsets, res.lines, this.syncOffset);
     // Debug breadcrumbs for verification (DevTools / automation): current & candidate offsets.
@@ -1029,7 +1215,7 @@ class Panel {
     const text = node?.textContent ?? '';
     const cum = [0];
     if (!node || node.nodeType !== Node.TEXT_NODE) return cum;
-    const r = document.createRange();
+    const r = node.ownerDocument!.createRange();
     let acc = 0;
     for (let i = 0; i < text.length; i++) {
       r.setStart(node, i);
@@ -1198,6 +1384,8 @@ class Panel {
   }
 
   metaDuration: number | undefined;
+  /** the video has captions its uploader made (YouTube's timeline then carries them instead of ASR) */
+  uploaderCaptions = false;
 
   /** Header subtitle: the resolved artist (not the uploader), plus "n / m곡" in multi-song videos. */
   subtitleFor(artist: string): string {
@@ -1250,6 +1438,13 @@ class Panel {
     }
     this.videoTitle = title;
     this.channel = channel;
+    void playerCaptions(this.videoId).then((c) => {
+      if (!c || !this.alive) return;
+      this.uploaderCaptions = c.uploader.length > 0 && (c.category === 'Music' || SONG_TITLE_RE.test(this.videoTitle) || (this.timeline?.songs.length ?? 0) > 0);
+      this.root.dataset.captions = `${c.uploader.join(',') || '-'}/${c.category ?? ''}`;
+      if (this.uploaderCaptions && this.ready && this.state.status === 'notfound' && this.captionFallback()) this.render();
+    });
+    void this.loadSkips();
     this.chapters = description ? capLastChapter(songListChapters(parseChapters(description), this.metaDuration), this.metaDuration) : [];
     this.commentChapters = false;
     const tl = timelineInPage(this.videoId);
@@ -1328,7 +1523,8 @@ class Panel {
   captionFallback(): boolean {
     const res = this.state.result;
     if (this.fromCaptions || this.picked || this.state.overridden || this.manualSync || this.anchors.length) return false;
-    if (this.chapterIndex < 0 || !this.transcript.length) return false;
+    if (this.chapterIndex < 0) return this.uploaderLyrics();
+    if (!this.transcript.length) return false;
     const chap = this.chapters[this.chapterIndex];
     const hit = chapterAt(this.chapters, this.chapterStart);
     if (!chap || !hit) return false;
@@ -1360,17 +1556,32 @@ class Panel {
     return true;
   }
 
+  /** A single song no lyrics site knows: the uploader's own captions are the lyrics, already timed. */
+  uploaderLyrics(): boolean {
+    if (this.state.result || this.chapters.length || !this.uploaderCaptions || !this.transcript.length) return false;
+    const lines = captionLyrics(this.transcript, { start: 0, end: Infinity }, 0);
+    if (lines.length < 6) return false;
+    this.fromCaptions = true;
+    this.syncOffset = 0;
+    const title = this.bestQuery?.title || this.titleEl.textContent || this.videoTitle;
+    this.titleEl.textContent = displayTitle(title);
+    const who = this.bestQuery?.artist && this.bestQuery.artist !== this.channel ? `${displayArtist(this.bestQuery.artist)} · ` : '';
+    this.subEl.textContent = `${who}업로더 자막`;
+    this.dispatch({ type: 'loaded', result: { kind: 'synced', artist: '업로더 자막', title, lines } });
+    return true;
+  }
+
   applyAsr(result: LyricsResult | null = this.state.result): boolean {
     const had = this.asrSynced;
     this.autoAnchors = [];
     this.asrSynced = false;
     if (!result || !this.transcript.length || this.manualSync || this.anchors.length) return had;
-    const a = alignToTranscript(result.lines, this.transcript, this.asrWindow());
-    this.root.dataset.asr = a ? `${a.offset != null ? a.offset.toFixed(2) : 'plain'}/${a.matches}/${a.anchors.length}${a.confident ? '' : '?'}` : 'none';
+    const a = alignToTranscript(result.lines, this.songTranscript(), this.asrWindow());
+    this.root.dataset.asr = a ? `${a.offset != null ? a.offset.toFixed(2) : 'plain'}/${a.matches}/${a.anchors.length}${a.segmented ? '/seg' : ''}${a.confident ? '' : '?'}` : 'none';
     if (!a?.confident) return had;
     this.asrSynced = true;
     this.autoConfident = true;
-    if (result.kind === 'synced' && a.offset != null) {
+    if (result.kind === 'synced' && a.offset != null && !a.segmented) {
       this.syncOffset = Math.round((a.offset - this.chapterStart) * 100) / 100;
     } else {
       this.syncOffset = 0;
@@ -1416,6 +1627,12 @@ class Panel {
     }
     // provisional header from the local parse; replaced by the resolved song
     const guess = buildQueries(ctx);
+    if (hit && this.chapters.length >= 2 && hit.index !== this.cardIndex) {
+      const first = this.cardIndex < 0;
+      this.cardIndex = hit.index;
+      // the very first song needs no announcement unless the user lands mid-playlist
+      if (!first || hit.index > 0) this.showSongCard(hit.index, guess.title, splitChapter(hit.chapter.title).artist || guess.artist);
+    }
     this.titleEl.textContent = guess.title;
     this.subEl.textContent = hit ? `${guess.artist} · ${hit.index + 1} / ${this.chapters.length}곡` : guess.artist;
     void this.applyPalette(hueIndex);
@@ -1470,11 +1687,17 @@ class Panel {
         if (res.result) {
           this.titleEl.textContent = displayTitle(res.result.title);
           this.subEl.textContent = this.subtitleFor(res.result.artist);
+          // the card was showing the playlist's guess: put the real song on it
+          if (this.cardEl.classList.contains('uw-songcard-on')) {
+            this.cardTitle.textContent = displayTitle(res.result.title);
+            this.cardArtist.textContent = displayArtist(res.result.artist);
+          }
         }
         this.dispatch({ type: 'loaded', result: res.result });
         if (this.captionFallback()) return;
         if (this.applyAsr()) this.render();
         if (!this.searchEl.hidden) this.showCandidates();
+        this.tellSkips();
         void this.upgradeWords(res.result, seq);
         return;
       }
@@ -1521,7 +1744,8 @@ class Panel {
   /** Duration-based intro offset; re-applied when the duration arrives, unless user/auto sync took over. */
   applyPrior(result: LyricsResult | null = this.state.result) {
     if (this.manualSync || this.autoConfident || this.anchors.length) return;
-    const dur = this.chapters.length ? undefined : this.currentDuration();
+    const full = this.chapters.length ? undefined : this.currentDuration();
+    const dur = full && this.useSkips() ? full - totalSkipped(this.skips(), full) : full;
     const next = result ? priorOffset(dur, result.lines, (result as { duration?: number }).duration, this.videoTitle) : 0;
     if (next === this.syncOffset) return;
     this.syncOffset = next;
@@ -1686,8 +1910,44 @@ class Panel {
     chrome.storage?.local.set({ [key]: r }).catch(() => { /* quota */ });
   }
 
+  /** Resolve candidates worth switching between: one per distinct lyrics, current first in its place. */
+  switchList(): Cand[] {
+    const seen = new Set<string>();
+    return this.candidates.filter((c) => {
+      const k = `${c.artist}|${c.title}|${c.kind}|${c.lines.length}`.toLowerCase();
+      if (!c.lines.length || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }
+
+  currentIn(list: Cand[]): number {
+    const cur = this.state.result;
+    return cur ? list.findIndex((c) => c.artist === cur.artist && c.title === cur.title && c.kind === cur.kind && c.lines.length === cur.lines.length) : -1;
+  }
+
+  updateSwitch() {
+    const list = this.switchList();
+    const show = list.length >= 2 && !this.gap && (this.state.status === 'synced' || this.state.status === 'plain' || this.state.status === 'notfound');
+    this.switchBtn.hidden = !show;
+    if (!show) return;
+    const i = this.currentIn(list);
+    this.switchBtn.textContent = i >= 0 ? `다른 가사 ${i + 1}/${list.length}` : '다른 가사';
+    this.switchBtn.title = '찾은 다른 가사로 바꿔요 · 고른 가사는 이 영상에서 기억해요';
+  }
+
+  /** Cycle to the next candidate; choose() pins it for this video (or this song of the playlist). */
+  nextCandidate() {
+    const list = this.switchList();
+    if (list.length < 2) return;
+    const next = list[(this.currentIn(list) + 1) % list.length];
+    this.choose(next);
+    this.showToast(`${displayArtist(next.artist)} · ${displayTitle(next.title)}${next.kind === 'synced' ? '' : ' (싱크 없음)'}`);
+  }
+
   // ----- render -----
   render() {
+    this.updateSwitch();
     const s = this.state;
     this.lyricsEl.replaceChildren();
     this.lineEls = [];
@@ -1780,6 +2040,44 @@ class Panel {
 // ---------- SPA lifecycle ----------
 let panel: Panel | null = null;
 
+// ---------- lyrics in their own window (Document Picture-in-Picture, Chrome 116+) ----------
+interface DocPip { requestWindow(o: { width: number; height: number }): Promise<Window>; window: Window | null }
+const docPip = (): DocPip | undefined => (window as unknown as { documentPictureInPicture?: DocPip }).documentPictureInPicture;
+function pipSupported(): boolean { return !!docPip(); }
+let pip: Window | null = null;
+let pipCss: Promise<string> | null = null;
+/** The panel's stylesheet text for the PiP document (content scripts' CSS doesn't follow the nodes). */
+document.addEventListener('uw:pip-open', () => { if (!retired) void openPip(); });
+document.addEventListener('uw:pip-fail', () => { if (!retired) panel?.showToast('작은 창을 열 수 없어요'); });
+function panelCss(): Promise<string> {
+  pipCss ??= send({ type: 'asset:css' }).then((r) => (r.ok ? r.css : '')).catch(() => '');
+  return pipCss;
+}
+const PIP_CSS = `
+html, body { margin: 0; height: 100%; background: #0b0b10; overflow: hidden; }
+.uw-panel.uw-pip { width: 100vw !important; height: 100vh; max-width: none; margin: 0; border-radius: 0; border: 0; }
+.uw-pip .uw-body { height: auto !important; flex: 1; min-height: 0; }
+.uw-pip .uw-resize, .uw-pip .uw-collapse-btn { display: none; }
+.uw-pip .uw-pip-btn { background: var(--uw-glow); color: #111; }
+`;
+
+/** page.js (page world) opened the window on our button's click: move the panel in. */
+async function openPip() {
+  const w = docPip()?.window;
+  if (!w || pip === w || !panel) return;
+  const style = w.document.createElement('style');
+  style.textContent = (await panelCss()) + PIP_CSS;
+  w.document.head.append(style);
+  w.document.title = 'Uwts 가사';
+  pip = w;
+  w.addEventListener('pagehide', () => {
+    if (pip !== w) return;
+    pip = null;
+    panel?.leavePip();
+  });
+  panel?.enterPip(w);
+}
+
 // A newer copy of this script can be injected into the same tab after the extension reloads
 // (background onInstalled). The newest copy wins: older ones retire on 'uw:retire', and the
 // panels of copies too old to listen (≤ 0.1.10) are hidden by build id.
@@ -1808,7 +2106,7 @@ function sync() {
   const token = nav.next();
   panel?.destroy();
   panel = null;
-  if (!id) return;
+  if (!id) { pip?.close(); return; }
   const p = new Panel(id, token);
   panel = p;
   let tries = 0;

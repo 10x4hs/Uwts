@@ -11,6 +11,7 @@ import { defaultDeps, resolveCached } from './resolve';
 import { searchTracks } from './lrclib';
 import { fromLrclibTrack } from './resolve';
 import { paletteFromPixels } from '../lib/color';
+import { parseSkips, type Skip } from '../lib/skips';
 
 const NULL_TTL_MS = 10 * 60 * 1000;
 
@@ -132,6 +133,17 @@ async function searchAll(q: string, kr = false): Promise<{ results: SearchHit[];
   return { results, partial: a.status === 'rejected' || b.status === 'rejected' || c.status === 'rejected' };
 }
 
+/** SponsorBlock's community-marked non-music parts of a music video (open API, CORS-enabled, no key). */
+async function sponsorSegments(videoId: string): Promise<unknown> {
+  const url = `https://sponsor.ajay.app/api/skipSegments?videoID=${videoId}&categories=${encodeURIComponent('["music_offtopic"]')}`;
+  try {
+    const { body } = await getJson<unknown>(url, 'SponsorBlock', [600]);
+    return body ?? [];
+  } catch {
+    return [];
+  }
+}
+
 async function handle(req: Request): Promise<unknown> {
   switch (req.type) {
     case 'lyrics:get': {
@@ -157,6 +169,13 @@ async function handle(req: Request): Promise<unknown> {
       const meta = await cached(`meta:v2:${req.videoId}`, () => videoMeta(req.videoId));
       return { ok: true, ...meta };
     }
+    case 'skips:get': {
+      if (!/^[\w-]{6,20}$/.test(req.videoId)) return { ok: true, skips: [] };
+      const raw = await cached(`skips:${req.videoId}`, () => sponsorSegments(req.videoId));
+      return { ok: true, skips: parseSkips(raw, req.duration) satisfies Skip[] };
+    }
+    case 'asset:css':
+      return { ok: true, css: await (await fetch(chrome.runtime.getURL('content.css'))).text() };
     case 'perm:status':
       return { ok: true, granted: await chrome.permissions.contains({ origins: EXTRA_ORIGINS }) };
     case 'lyrics:words':
@@ -199,6 +218,7 @@ chrome.runtime.onInstalled.addListener(async (d) => {
       const target = { tabId: tab.id };
       await chrome.scripting.insertCSS({ target, files: ['content.css'] }).catch(() => {});
       await chrome.scripting.executeScript({ target, files: ['content.js'] }).catch(() => {});
+      await chrome.scripting.executeScript({ target, files: ['page.js'], world: 'MAIN' }).catch(() => {});
     }
   } catch { /* no scripting permission (old manifest): the user reloads the tab */ }
 });

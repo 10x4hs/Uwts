@@ -6,7 +6,7 @@ const BUILD = Date.now().toString(36);
 mkdirSync('dist', { recursive: true });
 cpSync('public', 'dist', { recursive: true });
 await build({
-  entryPoints: { background: 'src/background/index.ts', content: 'src/content/index.ts', grant: 'src/grant/index.ts' },
+  entryPoints: { background: 'src/background/index.ts', content: 'src/content/index.ts', grant: 'src/grant/index.ts', page: 'src/page/index.ts' },
   bundle: true, format: 'iife', target: 'chrome120', outdir: 'dist', logLevel: 'info',
   define: { __UW_BUILD__: JSON.stringify(BUILD) },
 });

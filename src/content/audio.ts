@@ -67,6 +67,9 @@ export class VocalTracker {
   private lastOnset = -Infinity;
   private prevFlux = 0;
   private sampleN = 0;
+  /** Window whose frames drive sampling: the lyrics' PiP window keeps running when the tab is hidden. */
+  private frameWin: Window = window;
+  private loop: ((now: number) => void) | null = null;
   private gesture = () => { this.detachGesture(); void this.init(); };
 
   constructor(private video: HTMLVideoElement) {
@@ -94,12 +97,21 @@ export class VocalTracker {
     this.ready = true;
     const loop = (now: number) => {
       if (this.dead) return;
-      this.raf = requestAnimationFrame(loop);
+      this.raf = this.frameWin.requestAnimationFrame(loop);
       if (now - this.last < SAMPLE_MS || this.video.paused) return;
       this.last = now;
       this.sample();
     };
-    this.raf = requestAnimationFrame(loop);
+    this.loop = loop;
+    this.raf = this.frameWin.requestAnimationFrame(loop);
+  }
+
+  /** Move sampling to another window's frames (PiP opened or closed). */
+  setFrameWindow(w: Window) {
+    if (w === this.frameWin) return;
+    try { this.frameWin.cancelAnimationFrame(this.raf); } catch { /* window gone */ }
+    this.frameWin = w;
+    if (this.loop && !this.dead) this.raf = w.requestAnimationFrame(this.loop);
   }
 
   /** Total seconds of video time covered by onset data. */
@@ -159,7 +171,7 @@ export class VocalTracker {
   destroy() {
     this.dead = true;
     this.ready = false;
-    cancelAnimationFrame(this.raf);
+    try { this.frameWin.cancelAnimationFrame(this.raf); } catch { /* window gone */ }
     this.detachGesture();
   }
 }
