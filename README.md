@@ -1,15 +1,11 @@
-# Uwts Lyrics
+# Youtube WebexTentSion - Program
 
-YouTube 노래 영상 옆에, 노래를 따라 차오르는 싱크 가사를 띄워 주는 Chrome 확장 프로그램이에요.
+뮤비, 노래를 들을 때 옆에 가사를 띄어줍니다. Design like Youtube Music
 
 [![Release](https://img.shields.io/github/v/release/10x4hs/Uwts?style=for-the-badge&label=release&labelColor=111111&color=3b82f6)](https://github.com/10x4hs/Uwts/releases/latest)
 [![License](https://img.shields.io/github/license/10x4hs/Uwts?style=for-the-badge&labelColor=111111&color=6ab04c)](LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/10x4hs/Uwts/total?style=for-the-badge&label=downloads&labelColor=111111&color=4cc84a)](https://github.com/10x4hs/Uwts/releases)
 ![Chrome MV3](https://img.shields.io/badge/chrome-MV3-111111?style=for-the-badge&logo=googlechrome&logoColor=white&labelColor=111111&color=f59e0b)
-
-영상만 틀면 Uwts가 곡을 알아내서 LRCLIB, NetEase 같은 가사 서비스에서 싱크 가사를 찾아와요. 가사는 YouTube Music처럼 한 줄씩 떠오르고, 부르는 만큼 글자가 차올라요. 플레이리스트 영상은 곡마다 나눠서 보여 주고, 영상이 음원과 어긋나면 자막과 비교해서 싱크를 알아서 맞춰요.
-
-가사는 그때그때 각 서비스에서 불러와 보여 줄 뿐, 확장 프로그램에 들어 있지 않아요.
 
 <p align="center">
   <img src="docs/media/demo.gif" width="720" alt="Uwts Lyrics 실제 화면: 아이유 Blueming에 맞춰 단어마다 차오르는 가사">
@@ -17,25 +13,7 @@ YouTube 노래 영상 옆에, 노래를 따라 차오르는 싱크 가사를 띄
   <a href="https://github.com/10x4hs/Uwts/releases/download/v0.1.12/uwts-intro.mp4"><b>▶ 소개 영상 보기 (49초 · 소리 있음)</b></a>
 </p>
 
-## 최근 업데이트
-
-**v0.1.13** · 2026-11-08
-- 원곡 대신 커버 가사가 잡히던 문제를 고쳤어요. (예: BTS 'FAKE LOVE' MV)
-- 후렴이 수십 번 반복되는 노래도 자막에 맞춰 싱크를 잡아요. MV가 중간에 일부를 다시 불러도 뒷부분까지 맞아요.
-
-**v0.1.12** · 2026-11-08
-- 🪟 **작은 창**: 가사만 따로 띄워서 다른 탭에서도 볼 수 있어요.
-- ⏭️ **노래 없는 구간 건너뛰기**: MV의 드라마 인트로나 연기 장면 동안엔 "노래가 잠깐 멈춘 구간이에요"라고 알려 주고, 끝나면 이어서 맞춰요.
-- 🎯 **구간별 싱크**: 중간에 장면이 끼어든 영상도 뒷부분까지 맞춰요.
-- 🔁 **다른 가사 버튼**: 가사가 이상하면 한 번 눌러 다른 후보로 바꿔요.
-- 🎴 **곡 카드**: 플레이리스트에서 다음 곡으로 넘어가면 제목 카드가 잠깐 떠요.
-- 💬 **업로더 자막**: 가사 사이트에 없는 노래도 업로더가 단 자막으로 보여 줘요.
-
-이전 버전 기록은 [Releases](https://github.com/10x4hs/Uwts/releases)에 있어요.
-
-## 설치
-
-5분이면 끝나요. Chrome, Edge, 웨일 모두 같은 방법이에요.
+## Install If possible, have the Aside do it.
 
 **① 받기** · **[⬇️ uwts-lyrics.zip 받기 (최신 버전)](https://github.com/10x4hs/Uwts/releases/latest/download/uwts-lyrics.zip)**
 
@@ -58,7 +36,7 @@ YouTube 노래 영상 옆에, 노래를 따라 차오르는 싱크 가사를 띄
 
 <img src="docs/media/install-4-youtube.png" width="800" alt="YouTube 영상 오른쪽에 뜬 가사 패널">
 
-## 업데이트
+## Update
 
 ```text
 1. 패널 위 '새 버전 받기'를 눌러 zip을 받아요
@@ -73,14 +51,14 @@ YouTube 노래 영상 옆에, 노래를 따라 차오르는 싱크 가사를 띄
 
 | 기능 | 설명 |
 |---|---|
-| 🎤 **노래방 가사** | 줄이 바뀔 때 부드럽게 넘어가고, 부르는 만큼 글자가 차올라요. 단어 단위 싱크가 있는 곡은 단어마다 따라가요. |
-| 📃 **플레이리스트** | 챕터나 고정 댓글의 곡 목록으로 곡을 나눠요. 곡 목록에서 골라 바로 이동하고, 곡이 바뀌면 카드가 떠요. |
-| 🎯 **자동 싱크** | YouTube 자막과 비교해 싱크를 맞춰요. 중간에 장면이 끼어든 MV도 구간마다 따로 맞춰요. |
-| ⏭️ **노래 없는 구간** | MV의 드라마 인트로나 연기 장면은 [SponsorBlock](https://sponsor.ajay.app) 정보로 건너뛰고 맞춰요. |
-| 🪟 **작은 창** | 가사만 따로 띄워서 다른 탭에서도 볼 수 있어요. (Chrome 116 이상) |
-| 🔁 **다른 가사** | 가사가 이상하면 버튼 한 번으로 다른 후보로 바꿔요. 고른 가사는 영상마다 기억해요. |
-| 💬 **업로더 자막** | 가사 사이트에 없는 노래도 업로더가 단 자막이 있으면 그걸 가사로 보여 줘요. |
-| 🖥️ **전체 화면** | 전체 화면에서는 오른쪽에 가사 칸이 붙어요. |
+| **노래방 가사** | 줄이 바뀔 때 부드럽게 넘어가고, 부르는 만큼 글자가 차올라요. 단어 단위 싱크가 있는 곡은 단어마다 따라가요. |
+| **플레이리스트** | 챕터나 고정 댓글의 곡 목록으로 곡을 나눠요. 곡 목록에서 골라 바로 이동하고, 곡이 바뀌면 카드가 떠요. |
+| **자동 싱크** | YouTube 자막과 비교해 싱크를 맞춰요. 중간에 장면이 끼어든 MV도 구간마다 따로 맞춰요. |
+| **노래 없는 구간** | MV의 드라마 인트로나 연기 장면은 [SponsorBlock](https://sponsor.ajay.app) 정보로 건너뛰고 맞춰요. |
+| **작은 창** | 가사만 따로 띄워서 다른 탭에서도 볼 수 있어요. (Chrome 116 이상) |
+| **다른 가사** | 가사가 이상하면 버튼 한 번으로 다른 후보로 바꿔요. 고른 가사는 영상마다 기억해요. |
+| **업로더 자막** | 가사 사이트에 없는 노래도 업로더가 단 자막이 있으면 그걸 가사로 보여 줘요. |
+| **전체 화면** | 전체 화면에서는 오른쪽에 가사 칸이 붙어요. |
 
 ## 개발
 
