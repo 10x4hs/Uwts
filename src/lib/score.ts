@@ -88,8 +88,9 @@ export function scoreCandidate(c: ScoreInput, ctx: ScoreContext): number {
   if (title < 0.5) return 0;
   const arts = splitArtists(c.artist);
   let artist = 0;
-  for (const a of arts) {
-    if (phraseIn(a, hay)) { artist = 1; break; }
+  for (const [i, a] of arts.entries()) {
+    // "Cover Singer, BTS": only a later credit matches the video, so it's someone else's version
+    if (phraseIn(a, hay)) { artist = i === 0 ? 1 : Math.max(artist, 0.4); if (artist === 1) break; continue; }
     artist = Math.max(artist, tokenOverlap(a, hay) * 0.6);
   }
   const dur = durationScore(c.duration, ctx.duration);

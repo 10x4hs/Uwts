@@ -161,3 +161,17 @@ describe('groupSearch cleanup', () => {
     expect(isVariant('Super Shy')).toBe(false);
   });
 });
+
+describe('covers credited to the original artist', () => {
+  it('ranks "Cover Singer, BTS" below BTS for a BTS MV and keeps it from finishing early', () => {
+    const ctx = v("BTS (방탄소년단) 'FAKE LOVE' Official MV", 'HYBE LABELS', 319);
+    const orig = scoreCandidate({ artist: 'BTS', title: 'FAKE LOVE', duration: 242, synced: true }, ctx);
+    const cover = scoreCandidate({ artist: 'Ysabelle Cuevas, Bts', title: 'Fake Love', duration: 245, synced: true }, ctx);
+    expect(orig).toBeGreaterThan(cover);
+    expect(cover).toBeLessThan(HIGH_SCORE);
+  });
+  it('a feature led by the video artist keeps full artist credit', () => {
+    const ctx = v('IU(아이유) _ eight(에잇) (Prod.&Feat. SUGA of BTS)', '1theK', 170);
+    expect(scoreCandidate({ artist: 'IU, SUGA', title: 'eight', duration: 167, synced: true }, ctx)).toBeGreaterThanOrEqual(HIGH_SCORE);
+  });
+});
