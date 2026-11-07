@@ -63,3 +63,18 @@ describe('header display', () => {
     expect(displayArtist('C Jamm, BewhY')).toBe('C Jamm, BewhY');
   });
 });
+
+import { searchPrefill } from './state';
+describe('searchPrefill', () => {
+  it('puts the title and the artist together', () => {
+    expect(searchPrefill({ title: 'The Anecdote', artist: 'E SENS', channel: 'E SENS - Topic' })).toBe('The Anecdote E SENS');
+  });
+  it('a playlist song keeps its artist (from the chapter or the video title)', () => {
+    expect(searchPrefill({ title: '편견', artist: '버벌진트', channel: '힙합 플레이리스트' })).toBe('편견 버벌진트');
+  });
+  it('drops an uploader posing as the artist, and keeps only the first credit', () => {
+    expect(searchPrefill({ title: 'Santa Tell Me', artist: 'mycozyplaylist', channel: 'mycozyplaylist' })).toBe('Santa Tell Me');
+    expect(searchPrefill({ title: 'Hello', artist: '조용필, 버벌진트', channel: 'x' })).toBe('Hello 조용필');
+    expect(searchPrefill({ title: 'Eight', artist: 'IU feat. SUGA', channel: 'x' })).toBe('Eight IU');
+  });
+});

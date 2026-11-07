@@ -82,3 +82,10 @@ export function displayArtist(a: string): string {
   const parts = a.split(/\s*(?:,|&|\band\b|×|\/)\s*/i).map((s) => s.trim()).filter(Boolean);
   return parts.length > 2 ? `${parts[0]} 외 ${parts.length - 1}명` : a.trim();
 }
+
+/** Search box prefill: "title artist" (first credit only; an uploader channel is no artist). */
+export function searchPrefill(q: { title: string; artist: string; channel: string }): string {
+  const artist = q.artist.split(/\s*(?:,|&|\/|\bfeat\.?|\bft\.?|\bwith\b|×)\s*/i)[0].trim();
+  const keep = artist && artist.toLowerCase() !== q.channel.trim().toLowerCase();
+  return `${q.title.trim()}${keep ? ` ${artist}` : ''}`.trim();
+}

@@ -13,7 +13,7 @@ import { timelineParams, parseTimeline, songChapters, type Timeline } from '../l
 import { commentsToken, parseComments, pickTracklist } from '../lib/comments';
 import { compress, expand, skipAt, timedToVideo, totalSkipped, within, type Skip } from '../lib/skips';
 import { alignToTranscript, captionWordCount, captionLyrics, type TranscriptSeg } from './asr';
-import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, displayTitle, displayArtist, type Action, type PanelState } from './state';
+import { reduce, initialState, sameQuery, descriptionFromScript, burstVectors, displayTitle, displayArtist, searchPrefill, type Action, type PanelState } from './state';
 
 const PARTICLES = 14;
 const BURST_MS = 1800;
@@ -200,6 +200,7 @@ function icon(d: string): SVGSVGElement {
 }
 const ICON_SEARCH = 'M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM15.5 15.5 20 20';
 const ICON_CHEVRON = 'M6 15l6-6 6 6';
+const ICON_X = 'M7 7l10 10M17 7 7 17';
 const ICON_CLOUD_OFF = 'M3 3l18 18M8.5 8.6A5.5 5.5 0 0 0 7 19h9.5M19.6 16.4A4 4 0 0 0 17 9h-.6A6 6 0 0 0 10 5.3';
 const ICON_NOTE = 'M9 18V6l10-2v12M9 18a3 3 0 1 1-3-3 3 3 0 0 1 3 3ZM19 16a3 3 0 1 1-3-3 3 3 0 0 1 3 3Z';
 const ICON_LIST = 'M4 6h11M4 12h11M4 18h7M18 15V6l3 1.5M18 15a2 2 0 1 1-2-2 2 2 0 0 1 2 2Z';
@@ -231,6 +232,7 @@ class Panel {
   searchEl = el('div', 'uw-searchpanel');
   searchInput = el('input', 'uw-search-input');
   searchStatus = el('p', 'uw-search-status');
+  searchClear = el('button', 'uw-search-clear');
   /** which song a search is for, when it's not the one playing (song-list search) */
   searchFor: number | null = null;
   searchTarget = el('p', 'uw-search-target');
@@ -1767,9 +1769,25 @@ class Panel {
     const close = el('button', 'uw-btn uw-search-go', '닫기');
     close.type = 'button';
     close.addEventListener('click', () => this.closeSearch());
-    form.append(input, close);
+    // our own clear button: the native one is a dark-blue x that disappears on the glass
+    const field = el('span', 'uw-search-field');
+    const clear = this.searchClear;
+    clear.type = 'button';
+    clear.setAttribute('aria-label', '검색어 지우기');
+    clear.append(icon(ICON_X));
+    clear.addEventListener('click', () => {
+      input.value = '';
+      this.syncClear();
+      clearTimeout(this.searchTimer);
+      this.searchSeq++;
+      this.showCandidates();
+      input.focus({ preventScroll: true });
+    });
+    field.append(input, clear);
+    form.append(field, close);
     form.addEventListener('submit', (e) => { e.preventDefault(); clearTimeout(this.searchTimer); void this.search(input.value); });
     input.addEventListener('input', () => {
+      this.syncClear();
       clearTimeout(this.searchTimer);
       // drop results for the previous text right away so they never look like answers to the new one
       this.searchSeq++;
@@ -1791,10 +1809,13 @@ class Panel {
     this.searchEl.hidden = false;
     this.root.classList.add('uw-searching');
     if (wasHidden) {
-      // In multi-song videos the "artist" guess is usually the uploader (e.g. a playlist channel),
-      // so prefill only the song title there; otherwise "artist title".
-      const useArtist = q && this.chapterIndex < 0 && q.artist && q.artist !== this.channel;
-      this.searchInput.value = q ? (useArtist ? `${q.artist} ${q.title}` : q.title).trim() : '';
+      // "title artist" finds the song far more often than either alone; a playlist song takes its
+      // artist from the chapter ("Artist - Title") or the parsed guess, never the uploader channel
+      const chap = this.chapterIndex >= 0 ? splitChapter(this.chapters[this.chapterIndex]?.title ?? '') : null;
+      const title = chap?.title || q?.title || '';
+      const artist = chap?.artist || q?.artist || '';
+      this.searchInput.value = title ? searchPrefill({ title, artist, channel: this.channel }) : '';
+      this.syncClear();
       this.showCandidates();
     }
     this.body.scrollTop = 0;
@@ -1815,12 +1836,15 @@ class Panel {
     this.searchTarget.hidden = false;
     this.searchEl.hidden = false;
     this.root.classList.add('uw-searching');
-    this.searchInput.value = `${artist} ${title}`.trim();
+    this.searchInput.value = searchPrefill({ title, artist, channel: this.channel });
+    this.syncClear();
     this.renderResults([], '검색 중…');
     this.body.scrollTop = 0;
     this.searchInput.focus({ preventScroll: true });
     void this.search(this.searchInput.value);
   }
+
+  syncClear() { this.searchClear.hidden = !this.searchInput.value; }
 
   closeSearch() {
     this.searchFor = null;
@@ -1863,6 +1887,7 @@ class Panel {
     const cur = this.state.result;
     const { exact, partial } = groupByMatch(list);
     const items: (Cand | null)[] = partial.length ? [...exact, null, ...partial] : exact;
+    let marked = false; // the same lyrics often come back from several sources: mark only one as current
     for (const r of items) {
       if (!r) {
         const d = el('li', 'uw-results-divider', '비슷한 결과');
@@ -1873,7 +1898,8 @@ class Panel {
       const li = el('li');
       const b = el('button', r.match === 'partial' ? 'uw-result uw-result-partial' : 'uw-result');
       b.type = 'button';
-      const chosen = !!cur && cur.title === r.title && cur.artist === r.artist && cur.kind === r.kind;
+      const chosen = !marked && !!cur && cur.title === r.title && cur.artist === r.artist && cur.kind === r.kind;
+      if (chosen) marked = true;
       if (chosen) { b.classList.add('uw-result-current'); b.setAttribute('aria-current', 'true'); }
       const meta = el('span', 'uw-result-meta');
       meta.append(el('span', 'uw-result-artist', r.artist));
