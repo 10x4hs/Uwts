@@ -49,6 +49,14 @@ describe('songListChapters', () => {
     const sections = [{ start: 0, title: 'Intro' }, { start: 100, title: 'Verse 1' }, { start: 200, title: 'Hook' }, { start: 300, title: 'Verse 2' }];
     expect(songListChapters(sections, 900)).toEqual([]);
   });
+  it('keeps a playlist that plays the whole list twice (RESCENE PULSE)', () => {
+    const twice = [[0, 'Finest Thing'], [140, 'With'], [331, '백화요란 (Inside Out)'], [543, 'MEME'], [724, 'Dragon'],
+      [943, 'Finest Thing'], [1083, 'With'], [1274, '백화요란 (Inside Out)'], [1486, 'MEME'], [1667, 'Dragon']]
+      .map(([start, title]) => ({ start: start as number, title: title as string }));
+    expect(songListChapters(twice, 1887)).toEqual(twice);
+    const partial = [{ start: 0, title: 'A' }, { start: 200, title: 'B' }, { start: 400, title: 'A' }];
+    expect(songListChapters(partial, 900)).toEqual(partial);
+  });
 });
 
 describe('loop videos', () => {
